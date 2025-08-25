@@ -1,8 +1,10 @@
-from typing import Iterator
+from collections.abc import Iterator
 
 import pandas as pd
 import pysam
+
 from ..io.bam import allele_from_rg, read_is_duplicate
+
 
 def _iter_overlaps(
     bam: pysam.AlignmentFile, chrom: str, start: int, end: int, mapq: int, keep_dups: bool
@@ -18,6 +20,7 @@ def _iter_overlaps(
         if not (aln.reference_start < end and aln_end > start):
             continue
         yield aln
+
 
 def count_peaks(
     bam: pysam.AlignmentFile, peaks: pd.DataFrame, mapq: int, window_bp: int, keep_dups: bool

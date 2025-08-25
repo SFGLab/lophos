@@ -3,6 +3,7 @@ from typing import Any
 
 import yaml
 
+
 def load_yaml_if_exists(path: Path) -> dict[str, Any]:
     if path is None or not path.exists():
         return {}

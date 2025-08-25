@@ -1,5 +1,6 @@
 from collections.abc import Iterable
 
+
 def bh_fdr(pvals: Iterable[float]) -> list[float]:
     p = list(pvals)
     n = len(p)
@@ -11,6 +12,7 @@ def bh_fdr(pvals: Iterable[float]) -> list[float]:
         prev = min(prev, q)
         fdr[idx] = prev
     return fdr
+
 
 def fdr_mask(qvals: Iterable[float], alpha: float) -> list[bool]:
     return [q <= alpha for q in qvals]

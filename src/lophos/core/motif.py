@@ -1,34 +1,30 @@
-from dataclasses import dataclass
-from typing import Optional, Iterable, Tuple, List
-import logging
+from __future__ import annotations
 
-logger = logging.getLogger("lophos.motif")
+from collections.abc import Iterable
+from dataclasses import dataclass
+
 
 @dataclass(frozen=True)
 class MotifCheck:
     has_ctcf_motif: bool
-    orientation: Optional[str]  # "convergent", "divergent", "same", or None
+    orientation: str | None  # "convergent", "divergent", "same", or None
     note: str
 
+
 def check_ctcf_motif_for_anchors(
-    anchors: Iterable[Tuple[str, int, int]],
-    fasta_path: Optional[str] = None,
+    anchors: Iterable[tuple[str, int, int]],
+    fasta_path: str | None = None,
     _jaspar_pwm_id: str = "MA0139.1",
-) -> List[MotifCheck]:
+) -> list[MotifCheck]:
     """
-    Placeholder CTCF motif checker:
-    - If no FASTA provided or motif extras not installed, returns 'unknown' but valid.
-    - Keeps interface stable for later real motif scanning.
+    Placeholder CTCF motif checker.
+
+    - If no FASTA provided, returns a neutral 'disabled' result.
+    - With FASTA given, still returns a placeholder until real scanning is implemented.
+    - Public signature is stable so we can drop in a real scanner later.
     """
-    try:
-        if fasta_path is None:
-            raise RuntimeError("FASTA not provided")
-        # Attempt to import optional deps; if missing, fall back
-        import pyfaidx  # noqa: F401
-        import Bio  # noqa: F401
-        # Real scanning would happen here in a later version.
-        # For now, return neutral results to avoid breaking pipelines.
-        return [MotifCheck(False, None, "motif_scan_placeholder") for _ in anchors]
-    except Exception as e:
-        logger.info("Motif check skipped: %s", e)
+    if fasta_path is None:
         return [MotifCheck(False, None, "motif_check_disabled") for _ in anchors]
+
+    # Future: scan sequence in FASTA with JASPAR PWM and set orientation.
+    return [MotifCheck(False, None, "motif_scan_placeholder") for _ in anchors]

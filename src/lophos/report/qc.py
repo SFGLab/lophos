@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 
+
 def write_summary(path: Path, peaks: pd.DataFrame, loops: pd.DataFrame) -> None:
     s = []
     s.append(("peaks_total", len(peaks)))

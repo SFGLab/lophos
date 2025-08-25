@@ -51,11 +51,12 @@ lint.ignore = ["E501"]  # handled by black
 
 [tool.mypy]
 python_version = "3.10"
+ignore_missing_imports = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 strict = true
 exclude = ["tests/"]
-ignore_missing_imports = true
+
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lophos"]

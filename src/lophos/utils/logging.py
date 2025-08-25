@@ -1,5 +1,6 @@
 import logging
 
+
 def get_logger(name: str = "lophos") -> logging.Logger:
     logger = logging.getLogger(name)
     if not logger.handlers:

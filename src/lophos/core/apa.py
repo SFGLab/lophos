@@ -3,12 +3,14 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+
 @dataclass(frozen=True)
 class APAResult:
     matrix: np.ndarray  # type: ignore[type-arg]
     score: float
     window_bp: int
     bin_bp: int
+
 
 def compute_apa_matrix(
     _loops_df: pd.DataFrame,
