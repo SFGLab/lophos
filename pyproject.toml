@@ -55,6 +55,7 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 strict = true
 exclude = ["tests/"]
+ignore_missing_imports = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lophos"]

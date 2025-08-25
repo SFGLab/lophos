@@ -1,8 +1,9 @@
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any
+
 import yaml
 
-def load_yaml_if_exists(path: Path) -> Dict[str, Any]:
+def load_yaml_if_exists(path: Path) -> dict[str, Any]:
     if path is None or not path.exists():
         return {}
     with path.open() as fh:

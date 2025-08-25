@@ -1,6 +1,6 @@
-from typing import Iterable, List, Tuple
+from collections.abc import Iterable
 
-def bh_fdr(pvals: Iterable[float]) -> List[float]:
+def bh_fdr(pvals: Iterable[float]) -> list[float]:
     p = list(pvals)
     n = len(p)
     indexed = sorted(enumerate(p), key=lambda t: t[1])
@@ -12,5 +12,5 @@ def bh_fdr(pvals: Iterable[float]) -> List[float]:
         fdr[idx] = prev
     return fdr
 
-def fdr_mask(qvals: Iterable[float], alpha: float) -> List[bool]:
+def fdr_mask(qvals: Iterable[float], alpha: float) -> list[bool]:
     return [q <= alpha for q in qvals]
