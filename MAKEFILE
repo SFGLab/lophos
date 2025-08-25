@@ -1,0 +1,11 @@
+.PHONY: install lint test fmt precommit
+install:
+\tpip install -e .[dev]
+precommit:
+\tpre-commit install
+fmt:
+\truff check . --fix; black .
+lint:
+\truff check .; black --check .; mypy src/lophos
+test:
+\tpytest -q --cov=src/lophos --cov-report=term-missing

@@ -1,0 +1,18 @@
+bam: /path/to/sample.bam
+peaks: /path/to/ctcf_peaks.bed
+loops: /path/to/loops.bedpe
+out: results/sample
+mapq: 30
+peak_window: 500
+anchor_pad: 10000
+min_reads_peak: 5
+min_pairs_loop: 3
+fdr: 0.05
+validate_loops: local
+keep_duplicates: true
+motif:
+  enabled: false
+  fasta: null
+  jaspar_id: MA0139.1
+format: bed
+threads: 8
