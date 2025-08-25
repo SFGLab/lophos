@@ -3,11 +3,10 @@ from os import PathLike
 from typing import Optional
 
 import pysam
-
 from ..constants import MAT_RG_CANDIDATES, PAT_RG_CANDIDATES
 
 def open_bam(path: str | PathLike[str]) -> pysam.AlignmentFile:
-    return pysam.AlignmentFile(path, "rb")
+    return pysam.AlignmentFile(str(path), "rb")
 
 def read_is_duplicate(aln: pysam.AlignedSegment) -> bool:
     return aln.is_duplicate

@@ -2,7 +2,7 @@ import pandas as pd
 import pysam
 from ..io.bam import allele_from_rg, read_is_duplicate
 
-def _in_interval(chrom: str, pos: int, start: int, end: int) -> bool:
+def _in_interval(pos: int, start: int, end: int) -> bool:
     return start <= pos < end
 
 def count_loops(bam: pysam.AlignmentFile, loops: pd.DataFrame, mapq: int, anchor_pad: int, keep_dups: bool) -> pd.DataFrame:

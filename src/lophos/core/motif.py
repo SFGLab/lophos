@@ -13,7 +13,7 @@ class MotifCheck:
 def check_ctcf_motif_for_anchors(
     anchors: Iterable[Tuple[str, int, int]],
     fasta_path: Optional[str] = None,
-    jaspar_pwm_id: str = "MA0139.1",
+    _jaspar_pwm_id: str = "MA0139.1",
 ) -> List[MotifCheck]:
     """
     Placeholder CTCF motif checker:
