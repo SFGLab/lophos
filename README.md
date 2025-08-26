@@ -3,7 +3,7 @@
 > Allele-specific phasing of CTCF **peaks** and **loops** from haplotype-tagged HiChIP BAMs.
 
 **Status:** v0.1.1 (pre-alpha)
-**Authorship:** Solely developed by **Pranjul Mishra**, under the guidance of **Dr. Joanna Borkowska** and **Prof. Dariusz Plewczyński** (Structural and Functional Genomics Laboratory).
+**Authorship:** Developed by **Pranjul Mishra**, under the guidance of **Dr. Joanna Borkowska** and **Prof. Dariusz Plewczyński** (Structural and Functional Genomics Laboratory).
 
 ---
 
@@ -256,7 +256,7 @@ PRs and issues are welcome.
 ## Citation / Acknowledgment
 
 If this tool supports your work, please cite the repository and acknowledge:
-**“Solely developed by Pranjul Mishra, under the guidance of Dr. Joanna Borkowska and Prof. Dariusz Plewczyński (Structural and Functional Genomics Laboratory).”**
+**“Developed by Pranjul Mishra, under the guidance of Dr. Joanna Borkowska and Prof. Dariusz Plewczyński (Structural and Functional Genomics Laboratory).”**
 
 ---
 
