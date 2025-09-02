@@ -11,6 +11,7 @@ from .io import bed as bed_io
 from .io import bedpe as bedpe_io
 from .io.config import load_yaml_if_exists
 from .report import qc, writers
+from .report.summary import SummaryParams, compute_summary
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 console = Console()
@@ -78,3 +79,56 @@ def phase(
     writers.write_loops(out.with_suffix(".loops.bedpe"), loop_calls)
     qc.write_summary(out.with_suffix(".summary.tsv"), peak_calls, loop_calls)
     console.log(f"Done. Outputs: {out}.peaks.bed, {out}.loops.bedpe, {out}.summary.tsv")
+
+
+@app.command("summary")
+def summary(
+    out: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            help="LOPHOS run output directory",
+        ),
+    ],
+    prefix: Annotated[
+        str | None,
+        typer.Option(
+            help="Prefix (e.g., SAMPLE if files are SAMPLE.peaks.bed & SAMPLE.loops.bedpe)"
+        ),
+    ] = None,
+    fdr: Annotated[
+        float, typer.Option(min=0.0, help="FDR threshold for 'significant' counts")
+    ] = 0.05,
+    min_reads_peak: Annotated[
+        int, typer.Option(min=0, help="Min (M+P) reads for peaks to count as measurable")
+    ] = 5,
+    min_pairs_loop: Annotated[
+        int, typer.Option(min=0, help="Min (M+P) pairs for loops to count as measurable")
+    ] = 3,
+    no_tsv: Annotated[
+        bool, typer.Option("--no-tsv", help="Do not write <prefix>.qc_summary.tsv")
+    ] = False,
+) -> None:
+    """
+    Summarize an existing LOPHOS run (totals, significant features, medians, call breakdown).
+
+    Examples:
+      lophos summary --out results/SAMPLE
+      lophos summary --out results/SAMPLE --prefix SAMPLE --fdr 0.05
+    """
+    params = SummaryParams(
+        out=out,
+        prefix=prefix,
+        fdr=fdr,
+        min_reads_peak=min_reads_peak,
+        min_pairs_loop=min_pairs_loop,
+        write_tsv=(not no_tsv),
+    )
+    try:
+        compute_summary(params)
+    except Exception as e:  # noqa: BLE001
+        console.print(f"[red]ERROR:[/red] {e}")
+        # Chain the original exception to satisfy ruff B904
+        raise typer.Exit(code=1) from e
