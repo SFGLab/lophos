@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lophos"
-version = "0.1.2"
+version = "0.1.3"
 description = "LOops & Peaks HaplOtype phasing Suite — allele-specific phasing of CTCF peaks & loops from phased HiChIP BAMs."
 readme = "README.md"
 license = { file = "LICENSE" }
