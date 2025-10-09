@@ -2,8 +2,6 @@
 
 > Allele-specific phasing of CTCF **peaks** and **loops** from haplotype-tagged HiChIP BAMs.
 
-
-
 ---
 
 ## Overview (for biologists)
