@@ -2,8 +2,7 @@
 
 > Allele-specific phasing of CTCF **peaks** and **loops** from haplotype-tagged HiChIP BAMs.
 
-**Status:** v0.1.1 (pre-alpha)
-**Authorship:** Developed by **Pranjul Mishra**, under the guidance of **Dr. Joanna Borkowska** and **Prof. Dariusz Plewczyński** (Structural and Functional Genomics Laboratory).
+
 
 ---
 
@@ -147,7 +146,7 @@ Default outputs are **BED/BEDPE** as requested; TSV/CSV/BigBed or track hubs can
 | Option              | Purpose                              | Typical |
 | ------------------- | ------------------------------------ | ------- |
 | `--mapq`            | Minimum mapping quality to count     | `30`    |
-| `--peak-window`     | Peak summit ±bp window for counting  | `500`   |
+| `--peak-window`     | Peak ±bp window for counting  | `500`   |
 | `--anchor-pad`      | Padding around each loop anchor (bp) | `10000` |
 | `--min-reads-peak`  | Minimum (M+P) reads to call a peak   | `5`     |
 | `--min-pairs-loop`  | Minimum (M+P) pairs to call a loop   | `3`     |
