@@ -21,6 +21,9 @@ PEAKS_COLS = [
     "bias_call",
 ]
 
+# Column schema for loops (.loops.bedpe).  The columns correspond to those
+# written by ``lophos.report.writers.write_loops``.  The order of these
+# columns is frozen to enable robust downstream parsing and testing.
 LOOPS_COLS = [
     "chrom1",
     "start1",
@@ -28,10 +31,10 @@ LOOPS_COLS = [
     "chrom2",
     "start2",
     "end2",
-    "name",
-    "m",
-    "p",
-    "ambiguous",
+    "loop_id",
+    "maternal_pairs",
+    "paternal_pairs",
+    "ambiguous_pairs",
     "total_pairs",
     "log2_ratio_pairs",
     "p_value_pairs",
@@ -165,7 +168,8 @@ def compute_summary(params: SummaryParams) -> pd.DataFrame:
 
     # Optional TSV
     if params.write_tsv:
-        tsv_path = params.out / f"{prefix}.qc_summary.tsv"
+        # Write a deterministic quick QC file name to avoid confusion with legacy naming
+        tsv_path = params.out / f"{prefix}.quick_qc.tsv"
         df_summary.to_csv(tsv_path, sep="\t", index=False)
 
     return df_summary

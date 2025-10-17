@@ -108,10 +108,12 @@ examples/                  # example configs/notebooks
 
 ### Common contribution areas
 
-* **RG mapping tokens**: If your pipeline uses different maternal/paternal identifiers, update `src/lophos/constants.py` and add a unit test.
-* **Loop counting**: If mates in your data do not share `RG`, propose/implement explicit mate lookup in `core/counts_loops.py` (with tests).
-* **Validation**: Extend `core/validate_local.py` to compute real local backgrounds and Z‑scores. Include a switch to keep `local` behavior backward compatible.
-* **Outputs**: Add new format writers in `report/writers.py` (e.g., TSV/CSV/BigBed) and document them.
+* **RG mapping tokens**: If your pipeline uses non‑standard maternal/paternal identifiers, you no longer need to edit `src/lophos/constants.py`.  Pass regular expressions to `--maternal-rgid` and `--paternal-rgid` on the command line, or adapt the logic in `lophos.io.bam.set_rg_patterns()` if more complex matching is needed.  When modifying allele detection code, add unit tests to cover your identifiers.
+* **Loop counting**: If mates in your data do not share `RG`, propose or implement explicit mate lookup in `core/counts_loops.py` (with tests).  Currently such pairs are counted as `ambiguous_pairs`.
+* **Calling thresholds & ambiguous fraction**: To refine how peaks and loops are classified, adjust parameters in `BiasThresholds` or expose new CLI options such as `--min-abs-log2` (effect size threshold) or `--max-ambiguous-frac` (loop ambiguity tolerance).  When adding new thresholds, update `_classify()` in `core/calls.py`, persist them through the CLI and config precedence logic, and document them in the README.
+* **Validation**: Extend `core/validate_local.py` to compute real local backgrounds and Z‑scores.  The current `local` mode computes a global z‑score proxy.  Include a switch or new mode to keep existing behavior backward compatible.
+* **Config & manifests**: Runs now persist a resolved configuration as `<prefix>.run.json` and accept YAML files via `--config`.  When adding new parameters, ensure they are read from YAML, can be overridden by CLI, and are saved to the run manifest.  Add tests for config precedence.
+* **Schema & QC**: When modifying the columns of `.peaks.bed` or `.loops.bedpe`, update `docs/SCHEMA.md` and adjust `report/writers.py`.  Add a unit test asserting the schema via `writers.assert_schema()`.  If summary output changes, update the QC writer and integration tests.
 
 ---
 

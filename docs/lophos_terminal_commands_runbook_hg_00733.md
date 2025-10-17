@@ -1,5 +1,3 @@
-you got it. here’s a clean, copy-paste cheat sheet of the exact terminal commands we used (and a few safer, corrected variants where you had syntax hiccups). i grouped them by step.
-
 ---
 
 ## 0) environment & repo (once per machine)
@@ -208,5 +206,3 @@ python summary.py --out "$OUT" --prefix HG00733
 This prints a QC block and (optionally) writes a small TSV.
 
 ---
-
-If you want, I can throw all of this into a `RUNBOOK.md` in the repo so the whole team can reuse it without scrolling through chat.

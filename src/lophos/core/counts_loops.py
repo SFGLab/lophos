@@ -39,7 +39,7 @@ def count_loops(
     Notes
     -----
     - We assume mates share the same RG tag (common in phased pipelines).
-      If that assumption breaks, pairs are counted as 'ambiguous'.
+    - If that assumption breaks, pairs are counted as 'ambiguous'.
     - Expected columns in `loops`: chrom1, start1, end1, chrom2, start2, end2, [name?].
     - Output columns: maternal_pairs, paternal_pairs, ambiguous_pairs.
     """
