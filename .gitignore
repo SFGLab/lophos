@@ -1,0 +1,152 @@
+# -----------------------------------------------------------------------------
+# Python bytecode & caches
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ruff / Mypy / Pytest / Coverage / Hypothesis
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+
+# Type checker / language server
+.pyright/
+.dmypy.json
+
+# -----------------------------------------------------------------------------
+# Build / packaging / distribution
+# -----------------------------------------------------------------------------
+build/
+dist/
+wheelhouse/
+*.egg-info/
+.eggs/
+*.whl
+*.manifest
+*.spec
+
+# -----------------------------------------------------------------------------
+# Virtual environments & tooling
+# -----------------------------------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+.pyenv/
+.python-version
+
+# -----------------------------------------------------------------------------
+# Logs / profiling / temp
+# -----------------------------------------------------------------------------
+*.log
+logs/
+*.prof
+profile/
+tmp/
+temp/
+*.tmp
+*.bak
+*~
+
+# Editor swap/backup files
+*.swp
+*.swo
+*.orig
+
+# -----------------------------------------------------------------------------
+# OS & editor junk
+# -----------------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.code-workspace
+
+# -----------------------------------------------------------------------------
+# Notebooks (keep notebooks; ignore checkpoints only)
+# -----------------------------------------------------------------------------
+.ipynb_checkpoints/
+
+# -----------------------------------------------------------------------------
+# Project docs / static sites
+# -----------------------------------------------------------------------------
+docs/_build/
+site/
+public/
+
+# -----------------------------------------------------------------------------
+# LOPHOS run outputs & large data (keep tiny fixtures in tests/data)
+# -----------------------------------------------------------------------------
+# Common run/output directories
+results/
+runs/
+output/
+out/
+
+# Bed/bedpe/tsv/csv etc. produced under run/result folders
+results/**/*.peaks.bed
+results/**/*.loops.bedpe
+results/**/*.summary.tsv
+results/**/*.quick_qc.tsv
+results/**/*.run.json
+results/**/*.tsv
+results/**/*.csv
+results/**/*.png
+results/**/*.pdf
+
+runs/**/*.tsv
+runs/**/*.csv
+runs/**/*.peaks.bed
+runs/**/*.loops.bedpe
+runs/**/*.summary.tsv
+runs/**/*.quick_qc.tsv
+runs/**/*.run.json
+runs/**/*.png
+runs/**/*.pdf
+
+# Ignore typical genomics heavy files unless explicitly tracked as fixtures
+*.bam
+*.bai
+*.cram
+*.crai
+*.hic
+*.bigWig
+*.bw
+
+# small reference/fixture files under tests/data (very important)
+!tests/data/**
+!tests/**/data/**
+!testdata/**
+!**/fixtures/**
+
+# -----------------------------------------------------------------------------
+# Local config that shouldn't be committed
+# -----------------------------------------------------------------------------
+.env
+.env.*.local
+.envrc
+*.local.json
+*.secrets.json
+
+# -----------------------------------------------------------------------------
+# Docker / container (optional; keep .dockerignore tracked)
+# -----------------------------------------------------------------------------
+# docker/
+# *.img
+# *.sif
+
+# -----------------------------------------------------------------------------
+# Misc
+# -----------------------------------------------------------------------------
+*.sqlite
+*.db
