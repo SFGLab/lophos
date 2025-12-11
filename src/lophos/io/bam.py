@@ -180,6 +180,7 @@ def iter_read_segments(aln: pysam.AlignedSegment) -> list[dict[str, int | str]]:
 
     # Primary segment
     rname = aln.reference_name
+    assert rname is not None  # ensured by is_unmapped check above
     pos0 = int(aln.reference_start)
     strand = "-" if aln.is_reverse else "+"
     # If CIGAR is None (rare), approximate with aligned length as M's

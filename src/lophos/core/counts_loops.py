@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import TypedDict
 
 import pandas as pd
@@ -73,7 +74,7 @@ def _iter_reads_in_region(
     end: int,
     mapq: int,
     keep_dups: bool,
-):
+) -> Iterator[pysam.AlignedSegment]:
     """Yield reads from region with basic MAPQ/dup filtering."""
     for aln in bam.fetch(chrom, max(0, start), end):
         if aln.is_unmapped or aln.mapping_quality < mapq:
@@ -115,6 +116,8 @@ def _counts_for_single_loop_mates(
                 continue
 
             qn = aln.query_name
+            if qn is None:
+                continue
             if qn in seen_qnames:
                 continue
 
@@ -207,6 +210,8 @@ def _counts_for_single_loop_sa(
     for fchr, fs, fe in ((a1[0], a1[1], a1[2]), (a2[0], a2[1], a2[2])):
         for aln in _iter_reads_in_region(bam, fchr, fs, fe, mapq, keep_dups):
             qn = aln.query_name
+            if qn is None:
+                continue
             if qn in seen_reads:
                 continue
             seen_reads.add(qn)
@@ -224,8 +229,8 @@ def _counts_for_single_loop_sa(
                 continue
 
             for c in contacts:
-                ep1 = (c["chrom1"], int(c["start1"]), int(c["end1"]))
-                ep2 = (c["chrom2"], int(c["start2"]), int(c["end2"]))
+                ep1 = (str(c["chrom1"]), int(c["start1"]), int(c["end1"]))
+                ep2 = (str(c["chrom2"]), int(c["start2"]), int(c["end2"]))
                 if not _contact_hits_anchors(ep1, ep2, a1, a2):
                     continue
                 allele = allele_from_rg(aln)

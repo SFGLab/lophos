@@ -260,7 +260,7 @@ def phase(  # noqa: C901
         threads_param = int(params["threads"])
         bam_path_str = str(bam)
 
-        loop_kwargs_common = {
+        loop_kwargs_common: dict[str, int | str | bool] = {
             "mapq": int(params["mapq"]),
             "anchor_pad": int(params["anchor_pad"]),
             "keep_dups": bool(params["keep_duplicates"]),
@@ -299,7 +299,16 @@ def phase(  # noqa: C901
                 loop_counts = counts_loops.count_loops(
                     bam=bam_handle,
                     loops=loops_df_full,
-                    **loop_kwargs_common,
+                    mapq=int(params["mapq"]),
+                    anchor_pad=int(params["anchor_pad"]),
+                    keep_dups=bool(params["keep_duplicates"]),
+                    loop_mode=str(params["loop_mode"]),
+                    sa_min_mapq=int(params["sa_min_mapq"]),
+                    sa_min_seg_len=int(params["sa_min_seg_len"]),
+                    sa_min_cis_dist=int(params["sa_min_cis_dist"]),
+                    sa_allow_trans=bool(params["sa_allow_trans"]),
+                    sa_orientation=str(params["sa_orientation"]),
+                    sa_dedup_within_read=bool(params["sa_dedup_within_read"]),
                 )
                 loop_stats = stats.compute_loop_stats(loop_counts)
                 loop_calls = calls.call_bias_for_loops(

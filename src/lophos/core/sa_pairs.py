@@ -1,12 +1,14 @@
 # src/lophos/core/sa_pairs.py
 from __future__ import annotations
 
+import pysam
+
 from ..io import bam as bam_io
 
 Endpoint = tuple[str, int, int, str]  # chrom, start, end, strand ('+' or '-')
 
 
-def _order_key(ep: Endpoint) -> tuple:
+def _order_key(ep: Endpoint) -> tuple[str, int, int, str]:
     # Sort by chrom, then coordinate. This is acceptable as an approximation of read order.
     chrom, s, e, strand = ep
     return (chrom, s, e, strand)
@@ -85,7 +87,7 @@ def _pair_adjacent_endpoints(
     endpoints.sort(key=_order_key)
 
     contacts: list[dict[str, int | str]] = []
-    seen: set[tuple] = set()
+    seen: set[tuple[str, int, int, str, int, int]] = set()
 
     for i in range(len(endpoints) - 1):
         c1, s1, e1, st1 = endpoints[i]
@@ -126,7 +128,7 @@ def _pair_adjacent_endpoints(
 
 
 def build_contacts(
-    aln,
+    aln: pysam.AlignedSegment,
     *,
     min_mapq: int = 30,
     min_seg_len: int = 50,
