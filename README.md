@@ -1,6 +1,6 @@
 # LOPHOS — LOops & Peaks HaplOtype phasing Suite
 
-> Allele-specific phasing of CTCF **peaks** and **loops** from haplotype-tagged HiChIP BAMs.
+> Allele-specific phasing of CTCF **peaks** and **loops** from haplotype-tagged BAMs (paired-end or long-read SA:Z chimeras).
 
 ---
 
@@ -8,17 +8,20 @@
 
 LOPHOS quantifies **maternal vs paternal** support for:
 
-* **CTCF peaks** (from BED) using haplotype-tagged reads around each peak summit.
-* **Loops** (from BEDPE) using paired reads connecting the two anchors.
+* **CTCF peaks** (BED) using haplotype-tagged reads around each peak summit.
+* **Loops** (BEDPE) using either:
+
+  * **paired mates** bridging the two anchors (**mates** mode), or
+  * **split (SA:Z) segments** within a single long read that span the anchors (**sa** mode; ONT/Pore-C-style).
 
 For each feature, LOPHOS:
 
-1. **Counts** maternal (M) and paternal (P) support.
+1. **Counts** maternal (M) and paternal (P) support (ambiguous tracked separately for loops).
 2. **Tests** allele bias with a two-sided **binomial test** (`p = 0.5`).
 3. **Adjusts** p-values using **Benjamini–Hochberg (FDR)**.
 4. **Calls** each feature as **Maternal / Paternal / Balanced / Undetermined**.
 
-Outputs are plain **BED/BEDPE** tables you can sort, filter, and load in genome browsers. Other formats can be added if needed.
+Outputs are plain **BED/BEDPE** tables you can sort, filter, and load in genome browsers.
 
 ---
 
@@ -42,7 +45,7 @@ pytest -q
 
 ## Quickstart
 
-### Phase peaks & loops
+### Phase peaks & loops (paired-end “mates” mode, default)
 
 > **Note:** CLI options use **kebab-case** (hyphens), not underscores.
 
@@ -56,22 +59,41 @@ lophos phase \
   --min-reads-peak 5 --min-pairs-loop 3 --fdr 0.05 \
   --maternal-rgid "maternal|mat|M" --paternal-rgid "paternal|pat|P" \
   --pseudocount 1.0 --min-abs-log2 0.0 --max-ambiguous-frac 0.5 \
-  --validate-loops local
+  --validate-loops local \
+  --loop-mode mates
+  # Optional:
+  # --primary-only true  # write .primary.* filtered outputs
+  # --summary true       # also write <prefix>.quick_qc.tsv
+```
 
-  # Optional flags:
-  # --primary-only true  # drop ALT/decoy/unplaced contigs and write .primary.* outputs
-  # --summary true       # run QC summary immediately after phasing
+### Phase loops from long-read SA:Z chimeras (ONT/Pore-C “sa” mode)
+
+```bash
+lophos phase \
+  --bam   /path/to/<sample>.bam \
+  --peaks /path/to/<peaks>.bed \
+  --loops /path/to/<loops>.bedpe \
+  --out   results/<sample> \
+  --mapq 30 --peak-window 500 --anchor-pad 10000 \
+  --min-reads-peak 5 --min-pairs-loop 3 --fdr 0.05 \
+  --loop-mode sa \
+  --sa-min-mapq 30 \
+  --sa-min-seg-len 50 \
+  --sa-min-cis-dist 1000 \
+  --sa-allow-trans true \
+  --sa-orientation any \
+  --sa-dedup-within-read true
 ```
 
 This produces:
 
-* `results/<sample>.peaks.bed` — allele calls for peaks (see [Schema](docs/SCHEMA.md)).
-* `results/<sample>.loops.bedpe` — allele calls for loops (see [Schema](docs/SCHEMA.md)).
-* `results/<sample>.summary.tsv` — legacy per-class counts (used internally).
-* If `--summary true`, a quick QC table (`results/<sample>.quick_qc.tsv`) is written.
-* If `--primary-only true`, additional filtered files `results/<sample>.primary.peaks.bed` and `results/<sample>.primary.loops.bedpe` are created.
+* `results/<sample>.peaks.bed` — allele calls for peaks (see schema).
+* `results/<sample>.loops.bedpe` — allele calls for loops (see schema).
+* `results/<sample>.summary.tsv` — compact run summary.
+* If `--summary true`, also `results/<sample>.quick_qc.tsv`.
+* If `--primary-only true`, additional: `.primary.peaks.bed`, `.primary.loops.bedpe`.
 
-### Summarize an existing run (new)
+### Summarize an existing run
 
 ```bash
 lophos summary \
@@ -82,7 +104,7 @@ lophos summary \
   --min-pairs-loop 3
 ```
 
-This command reads the `*.peaks.bed` and `*.loops.bedpe` files in `--out`, infers the prefix if not provided, and prints a tidy QC report to the console.  The report includes totals, counts of significant features (at the chosen `--fdr` and minimum coverage thresholds), medians and the breakdown of calls.  A quick QC TSV (`<prefix>.quick_qc.tsv`) is written alongside the inputs unless `--no-tsv` is specified.  You can obtain the same quick QC file directly from the phasing step by using `--summary true` on `lophos phase`.
+Prints a tidy report and (by default) writes `<prefix>.quick_qc.tsv`.
 
 ---
 
@@ -90,7 +112,15 @@ This command reads the `*.peaks.bed` and `*.loops.bedpe` files in `--out`, infer
 
 ### BAM (haplotype-tagged)
 
-Reads must carry a read group (**RG**) tag indicating parental origin.  By default, any RG tag matching the regular expression `maternal|mat|M` is considered **maternal**, and any tag matching `paternal|pat|P` is considered **paternal** (case‑insensitive).  You can override these patterns at the command line with `--maternal-rgid` and `--paternal-rgid` to accommodate custom pipelines.
+Reads must carry a read group (**RG**) tag indicating parental origin.
+Defaults (case-insensitive):
+
+* **Maternal:** `maternal|mat|M`
+* **Paternal:** `paternal|pat|P`
+
+Override with `--maternal-rgid` / `--paternal-rgid` as needed.
+
+> SA mode expects long-read alignments where split mappings are encoded in **SA:Z** tags. Mates mode expects paired-end flags.
 
 ### Peaks (BED)
 
@@ -101,10 +131,10 @@ chrom  start  end  [name  score  strand]
 ### Loops (BEDPE)
 
 ```
-chrom1  start1  end1  chrom2  start2  end2  [name  score  strand1  strand2 ...]
+chrom1  start1  end1  chrom2  start2  end2  [name ...]
 ```
 
-> **BEDPE with extra columns** is supported. LOPHOS uses the first 6 BEDPE columns and **ignores any extras**.
+Extra columns are tolerated; only the first 6 are required.
 
 ---
 
@@ -119,8 +149,12 @@ chrom  start  end  peak_id  maternal  paternal  total  log2_ratio  p_value  fdr 
 ### Loops (`*.loops.bedpe`)
 
 ```
-chrom1  start1  end1  chrom2  start2  end2  loop_id  maternal_pairs  paternal_pairs  ambiguous_pairs  total_pairs  log2_ratio_pairs  p_value_pairs  fdr_pairs  bias_call
+chrom1  start1  end1  chrom2  start2  end2
+total_pairs  maternal_pairs  paternal_pairs  ambiguous_pairs  informative_pairs
+log2_ratio_pairs  p_value_pairs  fdr_pairs  bias_call
 ```
+
+> `informative_pairs = maternal_pairs + paternal_pairs` and equals `total_pairs` in the current implementation (ambiguous excluded from stats).
 
 ### Summary (`*.summary.tsv`)
 
@@ -138,125 +172,104 @@ loops_balanced       <int>
 loops_undetermined   <int>
 ```
 
-Default outputs are **BED/BEDPE** as requested; TSV/CSV/BigBed or track hubs can be added on request.
+---
+
+## Loop modes
+
+LOPHOS supports two loop counting modes:
+
+* **`mates`** (default): Paired-end HiChIP/Hi-C style. A contact is counted when one read maps in anchor A (±`anchor-pad`) and its **mate** maps in anchor B (±`anchor-pad`), in either direction. Allele is taken from RG. Use for standard paired-end data.
+
+* **`sa`** (long-read chimeric; ONT/Pore-C): Contacts are reconstructed from **SA:Z** split alignments within a single read. We pair **adjacent segments** (A–B, B–C, …), filter by per-segment **MAPQ** and **reference length**, drop very short cis links (`< --sa-min-cis-dist`) to avoid self-ligation artifacts, optionally restrict **orientation** for short-range cis, and optionally disallow **trans**. Each accepted contact is tested against loop anchors (±`anchor-pad`). Allele comes from RG; ambiguous haplotypes are tracked.
+
+### SA parameters
+
+* `--sa-min-mapq` (default **30**): per-segment MAPQ cutoff.
+* `--sa-min-seg-len` (default **50**): minimum reference-consumed length from CIGAR.
+* `--sa-min-cis-dist` (default **1000**): drop cis contacts closer than this (artifact guard).
+* `--sa-allow-trans / --no-sa-allow-trans` (default **allow**).
+* `--sa-orientation {any, convergent-short-cis}` (default **any**).
+* `--sa-dedup-within-read / --no-sa-dedup-within-read` (default **on**).
 
 ---
 
 ## CLI options (key)
 
-| Option                  | Purpose                                                               | Typical |
-| ----------------------- | --------------------------------------------------------------------- | ------- |
-| `--mapq`                | Minimum mapping quality to count reads                                | `30`    |
-| `--peak-window`         | Peak summit ± bp window for counting reads                            | `500`   |
-| `--anchor-pad`          | Padding (bp) added around each loop anchor for mate matching          | `10000` |
-| `--min-reads-peak`      | Minimum total (M + P) reads required to call a peak                   | `5`     |
-| `--min-pairs-loop`      | Minimum total (M + P) informative pairs required to call a loop       | `3`     |
-| `--fdr`                 | BH‑FDR threshold for significance                                      | `0.05`  |
-| `--keep-duplicates`     | Count PCR/optical duplicates (set `True` for HiChIP retaining duplicates) | `False` |
-| `--validate-loops`      | Additional loop QC: `none` (skip) or `local` (compute z‑score proxy)    | `local` |
-| `--maternal-rgid`       | Regex (case‑insensitive) to detect maternal RG tags                    | `"maternal|mat|M"` |
-| `--paternal-rgid`       | Regex to detect paternal RG tags                                        | `"paternal|pat|P"` |
-| `--pseudocount`         | Pseudocount added to M and P in log2 ratio calculation                  | `1.0`   |
-| `--min-abs-log2`        | Minimum absolute log2 ratio (effect size) required to call bias        | `0.0`   |
-| `--max-ambiguous-frac`  | Maximum fraction of ambiguous pairs tolerated when calling loops        | `0.5`   |
-| `--primary-only`        | Filter out ALT/decoy/unplaced contigs and write `.primary.*` outputs    | `False` |
-| `--summary`             | If `True`, run the QC summary at the end of `phase` and write `.quick_qc.tsv` | `False` |
-| `--threads`             | Number of threads for counting (reserved for future parallelism)        | `1`     |
-| `--log-level`           | Logging verbosity (`info`, `debug`, `warning`, `error`)                | `"info"` |
-| `--config`              | YAML configuration file; values override defaults unless specified on CLI | `None` |
+| Option                 | Purpose                                                   | Typical    |     |     |
+| ---------------------- | --------------------------------------------------------- | ---------- | --- | --- |
+| `--mapq`               | Minimum mapping quality to count reads                    | `30`       |     |     |
+| `--peak-window`        | Peak summit ± bp window for counting reads                | `500`      |     |     |
+| `--anchor-pad`         | Padding (bp) added around each loop anchor                | `10000`    |     |     |
+| `--loop-mode`          | `mates` (paired-end) or `sa` (SA:Z long-read)             | `mates`    |     |     |
+| `--sa-*`               | SA-specific knobs (see above)                             | —          |     |     |
+| `--min-reads-peak`     | Min (M+P) reads required to call a peak                   | `5`        |     |     |
+| `--min-pairs-loop`     | Min informative pairs (M+P) required to call a loop       | `3`        |     |     |
+| `--fdr`                | BH-FDR threshold                                          | `0.05`     |     |     |
+| `--keep-duplicates`    | Count duplicates                                          | `False`    |     |     |
+| `--validate-loops`     | `none` or `local` (z-score proxy)                         | `local`    |     |     |
+| `--maternal-rgid`      | Regex (case-insensitive) for maternal RG                  | `"maternal | mat | M"` |
+| `--paternal-rgid`      | Regex for paternal RG                                     | `"paternal | pat | P"` |
+| `--pseudocount`        | Pseudocount in log2 ratio                                 | `1.0`      |     |     |
+| `--min-abs-log2`       | Min absolute log2 ratio for calling bias                  | `0.0`      |     |     |
+| `--max-ambiguous-frac` | Max fraction ambiguous pairs tolerated when calling loops | `0.5`      |     |     |
+| `--primary-only`       | Write `.primary.*` (primary chroms only)                  | `False`    |     |     |
+| `--summary`            | Also write `<prefix>.quick_qc.tsv`                        | `False`    |     |     |
+| `--threads`            | Threads for counting                                      | `1`        |     |     |
+| `--log-level`          | `info`, `debug`, `warning`, `error`                       | `info`     |     |     |
+| `--config`             | YAML overrides (persisted to `<out>.run.json`)            | `None`     |     |     |
 
 ---
 
 ## Recommended workflow
 
-1. **Sanity‑check RG tags and set patterns**
+1. **Sanity-check RG tags**
 
    ```bash
    samtools view -H <sample>.bam | grep '^@RG'
    ```
 
-   Confirm that your BAM contains read groups identifying parental origin (e.g. `mat`/`pat`).  If your pipeline uses different identifiers, supply case‑insensitive regular expressions via `--maternal-rgid` and `--paternal-rgid` to match your tags instead of editing the source code.
+   Confirm maternal/paternal identifiers. If different, provide custom regex via `--maternal-rgid` / `--paternal-rgid`.
 
-2. **Try one sample** with defaults (above). If many features are **Undetermined**, relax thresholds:
+2. **Choose loop mode**
 
-   * `--min-reads-peak 3` and/or `--min-pairs-loop 2`
+   * Paired-end data → `--loop-mode mates`.
+   * Long-read (ONT/Pore-C) with SA:Z chimeras → `--loop-mode sa` and tune `--sa-*` knobs.
+
+3. **Trial run**, then adjust thresholds if many features are **Undetermined**:
+
+   * Lower `--min-reads-peak` / `--min-pairs-loop`
    * `--mapq 20`
    * `--fdr 0.10`
 
-3. **Sweep parameters** to find sensible settings for your dataset:
+4. **Batch** across samples (as in your current pipeline).
 
-   ```bash
-   for MQ in 20 30; do
-     for PK in 3 5; do
-       for LP in 2 3; do
-         OUT=results/sweep/<sample>_mq${MQ}_pk${PK}_lp${LP}
-         lophos phase --bam <bam> --peaks <bed> --loops <bedpe> \
-           --out "$OUT" --mapq $MQ --peak-window 500 --anchor-pad 10000 \
-           --min-reads-peak $PK --min-pairs-loop $LP --fdr 0.05 --validate-loops local
-       done
-     done
-   done
-   ```
-
-4. **Batch run** once parameters look good (adjust naming as needed):
-
-   ```bash
-   BAM_DIR=/path/to/merged_bams
-   PEAK_DIR=/path/to/personalized_peaks
-   LOOP_DIR=/path/to/personalized_loops/loops
-   OUT_DIR=results/batch; mkdir -p "$OUT_DIR"
-
-   find "$BAM_DIR" -name '*.bam' | while read -r BAM; do
-     S=$(basename "$BAM" .bam)
-     P="$PEAK_DIR/$S.bed"
-     L="$LOOP_DIR/$S.bedpe"
-     [[ -f "$P" && -f "$L" ]] || { echo "[skip] $S"; continue; }
-     lophos phase --bam "$BAM" --peaks "$P" --loops "$L" \
-       --out "$OUT_DIR/$S" --mapq 30 --peak-window 500 --anchor-pad 10000 \
-       --min-reads-peak 5 --min-pairs-loop 3 --fdr 0.05 --validate-loops local
-   done
-   ```
-
-5. **Summarize** any completed run:
-
-   ```bash
-   lophos summary \
-     --out results/<sample> \
-     --prefix <sample> \
-     --fdr 0.05 \
-     --min-reads-peak 5 \
-     --min-pairs-loop 3
-   ```
-
-   This command reads the `*.peaks.bed` and `*.loops.bedpe` files in `--out`, infers the prefix if not provided, and prints a tidy QC report to the console.  The report includes totals, counts of significant features (at the chosen `--fdr` and minimum coverage thresholds), medians and the breakdown of calls.  A quick QC TSV (`<prefix>.quick_qc.tsv`) is written alongside the inputs unless `--no-tsv` is specified.
-
-   You can also run `lophos phase ... --summary true` to produce the same QC table immediately after phasing—no separate `summary` invocation needed.
+5. **Summarize** with `lophos summary` or use `--summary true` during `phase`.
 
 ---
 
 ## Methods (concise)
 
-* **Counts:** per feature, compute maternal (M) and paternal (P) support.
-  Peaks: reads within ±`peak-window` around the summit.
-  Loops: paired reads bridging padded anchors (`anchor-pad`).
-* **Test:** `M ~ Binomial(M+P, 0.5)` (two-sided).
-* **Multiple testing:** BH-FDR over features.
+* **Counts**
+
+  * **Peaks:** reads within ±`peak-window` of the summit (MAPQ/dup filters).
+  * **Loops (mates):** one read in anchor A (±`anchor-pad`) and its **mate** in anchor B (±`anchor-pad`).
+  * **Loops (sa):** **adjacent SA segments** within a long read form a contact; per-segment MAPQ/length filters; short-cis filter; optional orientation/trans filters; dedup within read; accept if the two endpoints land in the two anchors (either order). Ambiguous haplotypes are tallied separately.
+
+* **Statistics:** two-sided binomial @ 0.5; BH-FDR.
+
 * **Calling:**
 
-  * If `M+P` < minimum → **Undetermined**.
-  * For loops, if the fraction of ambiguous pairs (`ambiguous_pairs/(M+P+ambiguous_pairs)`) exceeds `--max-ambiguous-frac`, call **Undetermined** regardless of other criteria.
-  * Else if `FDR ≤ α` and both an effect‑size threshold and a fold‑change threshold are satisfied:
-    * Absolute log2 ratio `|log2((M+PSEUDO)/(P+PSEUDO))| ≥ --min-abs-log2`.
-    * And `M ≥ P × min_fold` → **Maternal**, or `P ≥ M × min_fold` → **Paternal** (default `min_fold = 1.5`).
-  * Else → **Balanced** (non‑significant or small effect size).
+  * Below coverage floor → **Undetermined**.
+  * Loops with `ambiguous_frac > --max-ambiguous-frac` → **Undetermined**.
+  * Otherwise, if `FDR ≤ α` and both effect size (|log2| ≥ `--min-abs-log2`) and a fold guard (≥ 1.5×) pass → **Maternal** or **Paternal**; else **Balanced**.
 
 ---
 
 ## Assumptions & current limitations
 
-* Reads are **haplotype-tagged via RG**. If mates do **not** share RG, loop counting is conservative; explicit mate lookup will be added.
-* `--validate-loops local` triggers an approximate local validation: a global z‑score is computed from the distribution of `(M‑P)` across all loops as a proxy for local enrichment.  Future versions will implement true distance‑matched backgrounds and refine the local p‑value.
-* Motif orientation checks for CTCF are stubbed; planned as an optional enhancement.
+* Reads are **haplotype-tagged via RG**. SA mode propagates RG from the read to each contact.
+* `--validate-loops local` uses a global `(M−P)` proxy for z/p; distance-matched backgrounds are planned.
+* Motif/orientation checks for CTCF are optional (basic short-cis convergent policy available in SA mode).
 
 ---
 
@@ -264,36 +277,41 @@ Default outputs are **BED/BEDPE** as requested; TSV/CSV/BigBed or track hubs can
 
 ```
 src/lophos/
-  cli.py                   # Typer CLI (phase & summary)
-  core/                    # counts, stats, calls, validation (placeholder), APA, motif
-  io/                      # BAM / BED / BEDPE / YAML loaders
-  report/                  # writers, qc, and summary helpers
-tests/                     # unit + integration tests
-docs/                      # user docs
-examples/                  # example configs/notebooks
+  cli.py
+  core/
+    counts_peaks.py
+    counts_loops.py         # mates + sa dispatcher
+    sa_pairs.py             # SA:Z → contacts (new)
+    stats.py
+    calls.py
+    validate_local.py
+  io/
+    bam.py                  # RG mapping + SA helpers (new)
+    bed.py
+    bedpe.py
+    config.py
+  report/
+    writers.py
+    qc.py
+    summary.py
+tests/
+docs/
 ```
 
 ---
 
 ## Roadmap
 
-* Local loop enrichment (background & Z-scores)
-* Explicit mate RG lookup in loop counting
-* APA-lite matrices
-* Config-driven runs & manifests
-* Optional CTCF motif orientation checks
-* Performance profiling and speedups where needed
+* Distance-matched loop validation & APA-lite
+* Refinements for SA contact orientation rules
+* Config-driven batch/manifest execution
+* Golden tiny BAM for CI (peaks + loops, mates + sa)
 
 ---
 
 ## Contributing & Conduct
 
-Please see:
-
-* **[CONTRIBUTING](CONTRIBUTING.md)** — development workflow, style, testing
-* **[CODE\_OF\_CONDUCT](CODE_OF_CONDUCT.md)** — expected behavior
-
-PRs and issues are welcome.
+See **CONTRIBUTING.md** and **CODE_OF_CONDUCT.md**. PRs and issues welcome.
 
 ---
 

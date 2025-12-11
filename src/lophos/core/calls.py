@@ -30,11 +30,11 @@ class BiasThresholds:
         Defaults to 1.0 (no effect).
     """
 
-    min_reads: int = 5
+    min_reads: int = 5  # informative reads/pairs
     fdr: float = 0.05
-    min_fold: float = 1.5
-    min_abs_log2: float = 0.0
-    max_ambiguous_frac: float = 1.0
+    min_fold: float = 1.5  # practical effect guard
+    min_abs_log2: float = 0.0  # additional effect guard (optional)
+    max_ambiguous_frac: float = 1.0  # loops-only guard
 
 
 def _classify(
@@ -71,32 +71,40 @@ def _classify(
         called ``"Undetermined"``.
     """
     total = m + p
-    # Low coverage -> Undetermined
+
+    # Coverage gate
     if total < thr.min_reads:
         return "Undetermined"
-    # Ambiguous fraction guard for loops
+
+    # Ambiguity gate (loops)
     if ambiguous_frac is not None and ambiguous_frac > thr.max_ambiguous_frac:
         return "Undetermined"
-    # Non-significant p-value -> Balanced
+
+    # Significance gate
     if q > thr.fdr:
         return "Balanced"
-    # Compute log2 ratio if not provided
+
+    # Compute/consume effect size
     if log2_ratio is None:
         import math
 
         from ..constants import PSEUDOCOUNT
 
         log2_ratio = math.log2((m + PSEUDOCOUNT) / (p + PSEUDOCOUNT))
-    # Effect-size threshold
+
+    # Effect-size (log2) guard
     if abs(float(log2_ratio)) < thr.min_abs_log2:
         return "Balanced"
-    # Fold-change threshold
-    # m and p always >=0 here.  Use max to ensure at least 1 read on the opposing side
-    if m >= max(1, int(p * thr.min_fold)):
+
+    # Practical fold guard using the SAME pseudocount as log2
+    from ..constants import PSEUDOCOUNT
+
+    fold = (m + PSEUDOCOUNT) / (p + PSEUDOCOUNT)
+    if fold >= thr.min_fold:
         return "Maternal"
-    if p >= max(1, int(m * thr.min_fold)):
+    if (1.0 / fold) >= thr.min_fold:
         return "Paternal"
-    # If none of the directional thresholds are met, classify as balanced
+
     return "Balanced"
 
 
@@ -141,12 +149,7 @@ def call_bias_for_loops(stats_df: pd.DataFrame, thresholds: BiasThresholds) -> p
         df["ambiguous_frac"] if "ambiguous_frac" in df.columns else pd.Series([None] * len(df))
     )
     for m, p, q, r, amb in zip(
-        df["m"],
-        df["p"],
-        df["fdr_pairs"],
-        log2_ratios,
-        ambiguous_fracs,
-        strict=False,
+        df["m"], df["p"], df["fdr_pairs"], log2_ratios, ambiguous_fracs, strict=False
     ):
         calls.append(
             _classify(

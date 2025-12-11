@@ -79,3 +79,143 @@ def allele_from_rg(aln: pysam.AlignedSegment) -> str | None:
     if PAT_RG_PATTERN.search(rg_str):
         return "paternal"
     return None
+
+
+# ---------------------------------------------------------------------------
+# SA:Z-based helpers for long-read (ONT/Pore-C) chimeric contact reconstruction
+# ---------------------------------------------------------------------------
+
+
+# A robust CIGAR parser for reference-consumed length (M, D, N, =, X)
+def segment_len_from_cigar(cigar: str) -> int:
+    """
+    Reference-consumed length from CIGAR: sum of M, D, N, =, X.
+    (Insertions I, soft/hard clips S/H, pads P do not consume reference.)
+    """
+    total = 0
+    num = ""
+    for ch in cigar:
+        if ch.isdigit():
+            num += ch
+            continue
+        if not num:
+            # malformed piece; skip gracefully
+            continue
+        n = int(num)
+        if ch in ("M", "D", "N", "=", "X"):
+            total += n
+        # reset accumulator
+        num = ""
+    return total
+
+
+# SA:Z tag format per entry: rname,pos,strand,cigar,mapq,nm;
+# POS is 1-based in SA; convert to 0-based here.
+_SA_ENTRY_RE = re.compile(
+    r"(?P<rname>[^,]+),(?P<pos>[0-9]+),(?P<strand>[+-]),(?P<cigar>[^,]+),(?P<mapq>[0-9]+),(?P<nm>[0-9]+)"
+)
+
+
+def parse_sa_tag(sa_str: str) -> list[dict[str, int | str]]:
+    """
+    Parse an SA:Z string into a list of segment dicts with keys:
+      rname, pos0, strand, cigar, mapq, nm, ref_len
+
+    Notes
+    -----
+    - SA entries are separated by ';' and may end with a trailing ';'.
+    - POS in SA is 1-based; we store 0-based ``pos0``.
+    - ``ref_len`` is computed as reference-consumed CIGAR length.
+    """
+    segs: list[dict[str, int | str]] = []
+    if not sa_str:
+        return segs
+    for part in sa_str.strip().split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        m = _SA_ENTRY_RE.fullmatch(part)
+        if not m:
+            # skip malformed piece silently
+            continue
+        rname = m.group("rname")
+        pos1 = int(m.group("pos"))
+        strand = m.group("strand")
+        cigar = m.group("cigar")
+        mapq = int(m.group("mapq"))
+        nm = int(m.group("nm"))
+        pos0 = pos1 - 1  # convert to 0-based
+        ref_len = segment_len_from_cigar(cigar)
+        segs.append(
+            {
+                "rname": rname,
+                "pos0": pos0,
+                "strand": strand,
+                "cigar": cigar,
+                "mapq": mapq,
+                "nm": nm,
+                "ref_len": ref_len,
+            }
+        )
+    return segs
+
+
+def iter_read_segments(aln: pysam.AlignedSegment) -> list[dict[str, int | str]]:
+    """
+    Gather primary + SA segments for a read into a uniform representation.
+
+    Primary alignment:
+      rname   = aln.reference_name
+      pos0    = aln.reference_start (0-based)
+      strand  = '-' if aln.is_reverse else '+'
+      cigar   = aln.cigarstring (if None, fall back to "<len>M" for alignment length)
+      mapq    = aln.mapping_quality
+      nm      = NM tag if present else 0
+      ref_len = reference-consumed length computed from CIGAR
+
+    SA segments are parsed from SA:Z using ``parse_sa_tag``.
+    """
+    if aln.is_unmapped:
+        return []
+
+    # Primary segment
+    rname = aln.reference_name
+    pos0 = int(aln.reference_start)
+    strand = "-" if aln.is_reverse else "+"
+    # If CIGAR is None (rare), approximate with aligned length as M's
+    if aln.cigarstring:
+        cigar = aln.cigarstring
+    else:
+        try:
+            alen = int(aln.query_alignment_length)
+        except Exception:
+            alen = 0
+        cigar = f"{alen}M"
+    mapq = int(aln.mapping_quality)
+    try:
+        nm = int(aln.get_tag("NM"))
+    except Exception:
+        nm = 0
+    ref_len = segment_len_from_cigar(cigar)
+
+    segs: list[dict[str, int | str]] = [
+        {
+            "rname": rname,
+            "pos0": pos0,
+            "strand": strand,
+            "cigar": cigar,
+            "mapq": mapq,
+            "nm": nm,
+            "ref_len": ref_len,
+        }
+    ]
+
+    # SA:Z segments (optional)
+    try:
+        sa = aln.get_tag("SA")
+    except Exception:
+        sa = None
+    if sa:
+        segs.extend(parse_sa_tag(str(sa)))
+
+    return segs

@@ -22,13 +22,7 @@ console = Console()
 
 # ----------------------------------------------------------------------
 # Concurrency helpers
-#
-# To support multi-threaded counting of peaks and loops, we provide
-# helper functions that partition a DataFrame into chunks and process
-# each chunk in a separate thread.  Each worker opens its own BAM
-# handle to avoid thread-safety issues in pysam.  Results are
-# assembled in the original order of the chunks to preserve
-# deterministic output.
+# ----------------------------------------------------------------------
 
 
 def _count_worker_generic(
@@ -39,38 +33,9 @@ def _count_worker_generic(
     kwargs: dict[str, Any],
     idx: int,
 ) -> tuple[int, pd.DataFrame]:
-    """Internal helper to execute counting on a sub-dataframe.
-
-    Parameters
-    ----------
-    bam_path : str
-        Path to the BAM file.  A new handle will be opened inside
-        this function.
-    subdf : pandas.DataFrame
-        Subset of peaks or loops to process.
-    func : callable
-        Counting function (e.g., counts_peaks.count_peaks or
-        counts_loops.count_loops).
-    param_name : str
-        Name of the argument expected by ``func`` for the data
-        dataframe ("peaks" or "loops").
-    kwargs : dict
-        Additional keyword arguments passed to ``func`` (e.g., mapq,
-        window_bp, anchor_pad, keep_dups).
-    idx : int
-        Chunk index used to preserve ordering when results are
-        reassembled.
-
-    Returns
-    -------
-    tuple[int, pandas.DataFrame]
-        Index and resulting counts DataFrame.
-    """
-    # Open a fresh BAM handle for this worker
+    """Internal helper to execute counting on a sub-dataframe."""
     handle = bam_io.open_bam(bam_path)
     try:
-        # Build kwargs including the sub-dataframe under the correct
-        # parameter name (peaks or loops)
         call_kwargs = {param_name: subdf}
         call_kwargs.update(kwargs)
         result_df = func(bam=handle, **call_kwargs)
@@ -87,40 +52,7 @@ def _count_parallel(
     threads: int,
     **kwargs: Any,
 ) -> pd.DataFrame:
-    """Partition the input DataFrame and perform counting in parallel.
-
-    If ``threads`` is 1 or the dataframe is empty, this function
-    performs the counting sequentially.  Otherwise it splits the
-    dataframe into roughly equal chunks and processes each chunk in a
-    separate thread.  Each thread opens its own BAM handle via
-    ``bam_io.open_bam`` and calls the provided counting function.
-
-    Parameters
-    ----------
-    bam_path : str
-        Path to the BAM file used for counting.
-    df : pandas.DataFrame
-        Dataframe of peaks or loops to process.
-    func : callable
-        Counting function (counts_peaks.count_peaks or
-        counts_loops.count_loops).
-    param_name : str
-        Name of the argument in ``func`` that should receive the
-        dataframe ("peaks" or "loops").
-    threads : int
-        Number of worker threads.  If <= 1, sequential execution is
-        used.
-    **kwargs
-        Additional keyword arguments to pass to ``func`` (e.g., mapq,
-        window_bp, anchor_pad, keep_dups).
-
-    Returns
-    -------
-    pandas.DataFrame
-        Concatenated results from all chunks, assembled in the
-        original chunk order.
-    """
-    # Sequential path or no work
+    """Partition the input DataFrame and perform counting in parallel."""
     if threads <= 1 or len(df) == 0:
         handle = bam_io.open_bam(bam_path)
         try:
@@ -131,7 +63,6 @@ def _count_parallel(
         finally:
             handle.close()
 
-    # Determine chunk size.  Use math.ceil to ensure non-empty chunks
     chunk_size = math.ceil(len(df) / threads)
     results: dict[int, Any] = {}
     with ThreadPoolExecutor(max_workers=threads) as executor:
@@ -141,7 +72,6 @@ def _count_parallel(
             end = min((i + 1) * chunk_size, len(df))
             if start >= end:
                 continue
-            # Preserve original index to maintain correct IDs (peak_id / loop_id)
             subdf = df.iloc[start:end].copy()
             future = executor.submit(
                 _count_worker_generic,
@@ -156,8 +86,6 @@ def _count_parallel(
         for fut in futures:
             idx, part_df = fut.result()
             results[idx] = part_df
-    # Concatenate results in order of chunk index to preserve order
-    # Import pandas locally to avoid a global dependency for CLI consumers
     return cast(
         pd.DataFrame, pd.concat([results[i] for i in sorted(results.keys())], ignore_index=True)
     )
@@ -165,64 +93,65 @@ def _count_parallel(
 
 @app.callback()
 def main() -> None:
-    """LOPHOS — Allele-specific phasing of CTCF peaks & loops from phased HiChIP BAMs."""
+    """LOPHOS — Allele-specific phasing of CTCF peaks & loops from haplotype-tagged BAMs."""
 
 
 @app.command("phase")
 def phase(  # noqa: C901
-    bam: Annotated[Path, typer.Option(exists=True, help="Phased HiChIP BAM with RG tags")],
+    bam: Annotated[Path, typer.Option(exists=True, help="Haplotype-tagged BAM (RG labels)")],
     peaks: Annotated[Path, typer.Option(exists=True, help="CTCF peaks (BED)")],
     loops: Annotated[Path, typer.Option(exists=True, help="Loops (BEDPE)")],
     out: Annotated[Path, typer.Option(help="Output prefix (directory will be created)")],
     mapq: Annotated[int, typer.Option(help="Minimum MAPQ to count")] = 30,
     peak_window: Annotated[int, typer.Option(help="Peak summit +/- bp window")] = 500,
-    anchor_pad: Annotated[
-        int, typer.Option(help="Anchor padding (bp) when matching mates")
-    ] = 10_000,
+    anchor_pad: Annotated[int, typer.Option(help="Anchor padding (bp)")] = 10_000,
     min_reads_peak: Annotated[int, typer.Option(help="Min total reads to call a peak")] = 5,
     min_pairs_loop: Annotated[int, typer.Option(help="Min informative pairs to call a loop")] = 3,
     fdr: Annotated[float, typer.Option(help="BH-FDR threshold")] = 0.05,
-    keep_duplicates: Annotated[bool, typer.Option(help="Keep PCR/optical duplicates")] = False,
-    validate_loops: Annotated[str, typer.Option(help="{none,local} (advanced later)")] = "local",
-    # New options
+    keep_duplicates: Annotated[bool, typer.Option(help="Keep duplicates")] = False,
+    validate_loops: Annotated[str, typer.Option(help="{none,local}")] = "local",
+    # RG mapping
     maternal_rgid: Annotated[
         str, typer.Option(help="Regex for maternal RG identifiers")
     ] = "maternal|mat|M",
     paternal_rgid: Annotated[
         str, typer.Option(help="Regex for paternal RG identifiers")
     ] = "paternal|pat|P",
-    pseudocount: Annotated[
-        float, typer.Option(help="Pseudocount added to M/P in log2 ratio")
-    ] = 1.0,
-    min_abs_log2: Annotated[
-        float, typer.Option(help="Minimum absolute log2 ratio for bias calling")
-    ] = 0.0,
-    max_ambiguous_frac: Annotated[
-        float, typer.Option(help="Max ambiguous fraction to call loops (default 0.5)")
-    ] = 0.5,
+    # Effect-size controls
+    pseudocount: Annotated[float, typer.Option(help="Pseudocount for log2 ratio")] = 1.0,
+    min_abs_log2: Annotated[float, typer.Option(help="Min |log2| for bias calling")] = 0.0,
+    max_ambiguous_frac: Annotated[float, typer.Option(help="Max ambiguous fraction (loops)")] = 0.5,
+    # Loop mode (new)
+    loop_mode: Annotated[
+        str,
+        typer.Option(
+            help="Loop pairing mode: 'mates' (paired-end) or 'sa' (SA:Z chimeric long-read)"
+        ),
+    ] = "mates",
+    # SA:Z mode knobs (used when loop_mode='sa')
+    sa_min_mapq: Annotated[int, typer.Option(help="[sa] Min MAPQ per segment")] = 30,
+    sa_min_seg_len: Annotated[int, typer.Option(help="[sa] Min aligned segment length (bp)")] = 50,
+    sa_min_cis_dist: Annotated[int, typer.Option(help="[sa] Min cis distance to keep (bp)")] = 1000,
+    sa_allow_trans: Annotated[bool, typer.Option(help="[sa] Allow trans-chrom contacts")] = True,
+    sa_orientation: Annotated[
+        str,
+        typer.Option(help="[sa] Orientation policy: 'any' or 'convergent-short-cis'"),
+    ] = "any",
+    sa_dedup_within_read: Annotated[
+        bool, typer.Option(help="[sa] Dedup same contact within read")
+    ] = True,
+    # Misc
     primary_only: Annotated[
-        bool, typer.Option(help="Filter out ALT/decoy/Un contigs and output .primary.* files")
+        bool, typer.Option(help="Write .primary.* (primary chroms only)")
     ] = False,
     summary: Annotated[bool, typer.Option(help="Run QC summary after phasing")] = False,
-    threads: Annotated[
-        int, typer.Option(min=1, help="Number of threads for counting (future use)")
-    ] = 1,
-    log_level: Annotated[
-        str, typer.Option(help="Logging level (info, debug, warning, error)")
-    ] = "info",
+    threads: Annotated[int, typer.Option(min=1, help="Threads for counting")] = 1,
+    log_level: Annotated[str, typer.Option(help="Logging: info, debug, warning, error")] = "info",
     config: Annotated[
         Path | None, typer.Option(help="YAML config to override/record params")
     ] = None,
 ) -> None:
-    """Phase CTCF peaks and loops using a haplotype-tagged BAM.
-
-    This command counts maternal and paternal reads/pairs supporting peaks and loops,
-    performs binomial tests with FDR correction, applies bias calling thresholds
-    and writes out bed/bedpe files summarising the results.  Optional features
-    include custom RG tag regexes, effect-size thresholds, ambiguous pair
-    handling, primary-chromosome filtering and integrated QC summarisation.
-    """
-
+    """Phase CTCF peaks and loops using a haplotype-tagged BAM."""
     # -----------------------------------------------------------------------
     # 1. Load configuration and resolve parameters
     # -----------------------------------------------------------------------
@@ -240,6 +169,13 @@ def phase(  # noqa: C901
         "pseudocount": 1.0,
         "min_abs_log2": 0.0,
         "max_ambiguous_frac": 0.5,
+        "loop_mode": "mates",
+        "sa_min_mapq": 30,
+        "sa_min_seg_len": 50,
+        "sa_min_cis_dist": 1000,
+        "sa_allow_trans": True,
+        "sa_orientation": "any",
+        "sa_dedup_within_read": True,
         "primary_only": False,
         "summary": False,
         "threads": 1,
@@ -255,8 +191,7 @@ def phase(  # noqa: C901
         return cfg_data or {}
 
     def resolve_params(cli_vals: dict[str, Any], cfg_vals: dict[str, Any]) -> dict[str, Any]:
-        """Return final parameter values. CLI overrides config except
-        when the CLI value matches its default and config supplies an override."""
+        """CLI overrides config except when CLI equals default and config provides a value."""
         resolved: dict[str, Any] = {}
         for name, default_val in defaults.items():
             cli_val = cli_vals.get(name, default_val)
@@ -266,7 +201,6 @@ def phase(  # noqa: C901
                 resolved[name] = cli_val
         return resolved
 
-    # Build dictionaries of CLI values and config values
     cli_dict: dict[str, Any] = {
         "mapq": mapq,
         "peak_window": peak_window,
@@ -281,6 +215,13 @@ def phase(  # noqa: C901
         "pseudocount": pseudocount,
         "min_abs_log2": min_abs_log2,
         "max_ambiguous_frac": max_ambiguous_frac,
+        "loop_mode": loop_mode,
+        "sa_min_mapq": sa_min_mapq,
+        "sa_min_seg_len": sa_min_seg_len,
+        "sa_min_cis_dist": sa_min_cis_dist,
+        "sa_allow_trans": sa_allow_trans,
+        "sa_orientation": sa_orientation,
+        "sa_dedup_within_read": sa_dedup_within_read,
         "primary_only": primary_only,
         "summary": summary,
         "threads": threads,
@@ -290,7 +231,7 @@ def phase(  # noqa: C901
     params = resolve_params(cli_dict, cfg_dict)
 
     # -----------------------------------------------------------------------
-    # 2. Update module-level constants and RG patterns
+    # 2. Update constants and RG patterns
     # -----------------------------------------------------------------------
     from . import constants
 
@@ -301,7 +242,7 @@ def phase(  # noqa: C901
     )
 
     # -----------------------------------------------------------------------
-    # 3. Create output directory and announce start
+    # 3. Output dir & banner
     # -----------------------------------------------------------------------
     out.parent.mkdir(parents=True, exist_ok=True)
     console.rule("[bold]LOPHOS phasing")
@@ -313,16 +254,30 @@ def phase(  # noqa: C901
     loops_df_full = bedpe_io.read_bedpe(loops)
 
     # -----------------------------------------------------------------------
-    # 5. Perform counts, stats, calls and optional validation in a helper
+    # 5. Perform counts, stats, calls (validation optional)
     # -----------------------------------------------------------------------
     def perform_phasing() -> tuple[Any, Any]:
-        """Count reads/pairs, compute statistics, call biases and run validation."""
         threads_param = int(params["threads"])
         bam_path_str = str(bam)
-        # If threads <= 1, fall back to sequential counting using a single BAM handle
+
+        loop_kwargs_common = {
+            "mapq": int(params["mapq"]),
+            "anchor_pad": int(params["anchor_pad"]),
+            "keep_dups": bool(params["keep_duplicates"]),
+            # new dispatch + SA params (counts_loops should accept these kwargs)
+            "loop_mode": str(params["loop_mode"]),
+            "sa_min_mapq": int(params["sa_min_mapq"]),
+            "sa_min_seg_len": int(params["sa_min_seg_len"]),
+            "sa_min_cis_dist": int(params["sa_min_cis_dist"]),
+            "sa_allow_trans": bool(params["sa_allow_trans"]),
+            "sa_orientation": str(params["sa_orientation"]),
+            "sa_dedup_within_read": bool(params["sa_dedup_within_read"]),
+        }
+
         if threads_param <= 1:
             bam_handle = bam_io.open_bam(bam)
             try:
+                # Peaks
                 peak_counts = counts_peaks.count_peaks(
                     bam=bam_handle,
                     peaks=peaks_df_full,
@@ -340,12 +295,11 @@ def phase(  # noqa: C901
                         min_abs_log2=float(params["min_abs_log2"]),
                     ),
                 )
+                # Loops
                 loop_counts = counts_loops.count_loops(
                     bam=bam_handle,
                     loops=loops_df_full,
-                    mapq=int(params["mapq"]),
-                    anchor_pad=int(params["anchor_pad"]),
-                    keep_dups=bool(params["keep_duplicates"]),
+                    **loop_kwargs_common,
                 )
                 loop_stats = stats.compute_loop_stats(loop_counts)
                 loop_calls = calls.call_bias_for_loops(
@@ -361,8 +315,7 @@ def phase(  # noqa: C901
             finally:
                 bam_handle.close()
         else:
-            # Multi-threaded counting: partition peaks and loops and process in parallel
-            # Peaks counts
+            # Peaks (parallel)
             peak_counts = _count_parallel(
                 bam_path_str,
                 peaks_df_full,
@@ -383,16 +336,14 @@ def phase(  # noqa: C901
                     min_abs_log2=float(params["min_abs_log2"]),
                 ),
             )
-            # Loops counts
+            # Loops (parallel)
             loop_counts = _count_parallel(
                 bam_path_str,
                 loops_df_full,
                 counts_loops.count_loops,
                 "loops",
                 threads_param,
-                mapq=int(params["mapq"]),
-                anchor_pad=int(params["anchor_pad"]),
-                keep_dups=bool(params["keep_duplicates"]),
+                **loop_kwargs_common,
             )
             loop_stats = stats.compute_loop_stats(loop_counts)
             loop_calls = calls.call_bias_for_loops(
@@ -405,11 +356,10 @@ def phase(  # noqa: C901
                     max_ambiguous_frac=float(params["max_ambiguous_frac"]),
                 ),
             )
-            # Local validation if requested; open a new BAM handle for validation
+            # Local validation (optional)
             if str(params["validate_loops"]) == "local":
                 from .core.validate_local import run_local_validation
 
-                # open BAM handle for validation (use one handle; validation is sequential)
                 bam_handle_val = bam_io.open_bam(bam)
                 try:
                     loop_calls = run_local_validation(
@@ -426,14 +376,14 @@ def phase(  # noqa: C901
     peak_calls_full, loop_calls_full = perform_phasing()
 
     # -----------------------------------------------------------------------
-    # 6. Write outputs for full data
+    # 6. Write outputs
     # -----------------------------------------------------------------------
     writers.write_peaks(out.with_suffix(".peaks.bed"), peak_calls_full)
     writers.write_loops(out.with_suffix(".loops.bedpe"), loop_calls_full)
     qc.write_summary(out.with_suffix(".summary.tsv"), peak_calls_full, loop_calls_full)
 
     # -----------------------------------------------------------------------
-    # 7. Optionally write primary-only outputs
+    # 7. Primary-only outputs
     # -----------------------------------------------------------------------
     if bool(params["primary_only"]):
         import re
@@ -515,23 +465,13 @@ def summary(
     fdr: Annotated[
         float, typer.Option(min=0.0, help="FDR threshold for 'significant' counts")
     ] = 0.05,
-    min_reads_peak: Annotated[
-        int, typer.Option(min=0, help="Min (M+P) reads for peaks to count as measurable")
-    ] = 5,
-    min_pairs_loop: Annotated[
-        int, typer.Option(min=0, help="Min (M+P) pairs for loops to count as measurable")
-    ] = 3,
+    min_reads_peak: Annotated[int, typer.Option(min=0, help="Min (M+P) reads for peaks")] = 5,
+    min_pairs_loop: Annotated[int, typer.Option(min=0, help="Min (M+P) pairs for loops")] = 3,
     no_tsv: Annotated[
         bool, typer.Option("--no-tsv", help="Do not write <prefix>.qc_summary.tsv")
     ] = False,
 ) -> None:
-    """
-    Summarize an existing LOPHOS run (totals, significant features, medians, call breakdown).
-
-    Examples:
-      lophos summary --out results/SAMPLE
-      lophos summary --out results/SAMPLE --prefix SAMPLE --fdr 0.05
-    """
+    """Summarize an existing LOPHOS run (totals, significant features, medians, call breakdown)."""
     params = SummaryParams(
         out=out,
         prefix=prefix,
@@ -544,5 +484,4 @@ def summary(
         compute_summary(params)
     except Exception as e:  # noqa: BLE001
         console.print(f"[red]ERROR:[/red] {e}")
-        # Chain the original exception to satisfy ruff B904
         raise typer.Exit(code=1) from e
