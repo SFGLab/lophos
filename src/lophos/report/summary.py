@@ -21,9 +21,7 @@ PEAKS_COLS = [
     "bias_call",
 ]
 
-# Column schema for loops (.loops.bedpe).  The columns correspond to those
-# written by ``lophos.report.writers.write_loops``.  The order of these
-# columns is frozen to enable robust downstream parsing and testing.
+# MUST match the frozen order written by ``lophos.report.writers.write_loops``.
 LOOPS_COLS = [
     "chrom1",
     "start1",
@@ -31,15 +29,23 @@ LOOPS_COLS = [
     "chrom2",
     "start2",
     "end2",
-    "loop_id",
+    "total_pairs",
     "maternal_pairs",
     "paternal_pairs",
     "ambiguous_pairs",
-    "total_pairs",
+    "homozygous_pairs",
+    "informative_pairs",
+    "noninformative_pairs",
+    "ambiguous_frac",
     "log2_ratio_pairs",
     "p_value_pairs",
     "fdr_pairs",
     "bias_call",
+    "evidence_tier",
+    "bias_call_direct",
+    "bias_call_inferred",
+    "bias_call_final",
+    "inferred_reason",
 ]
 
 
@@ -54,7 +60,6 @@ class SummaryParams:
 
 
 def _detect_prefix(out: Path) -> str:
-    """Infer a common prefix from *.peaks.bed and *.loops.bedpe in `out`."""
     peaks = {p.name.replace(".peaks.bed", "") for p in out.glob("*.peaks.bed")}
     loops = {p.name.replace(".loops.bedpe", "") for p in out.glob("*.loops.bedpe")}
     common = peaks & loops
@@ -88,9 +93,8 @@ def _read_peaks(path: Path) -> pd.DataFrame:
 
 
 def _read_loops(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(path, sep="\t", header=None, dtype={0: str, 3: str, 14: str})
+    df = pd.read_csv(path, sep="\t", header=None, dtype=str)
     if df.shape[1] < len(LOOPS_COLS):
-        # Be permissive if extra trailing cols ever appear; take first 15
         raise ValueError(
             f"Unexpected loops columns: got {df.shape[1]} cols, expected >= {len(LOOPS_COLS)}"
         )
@@ -107,11 +111,9 @@ def compute_summary(params: SummaryParams) -> pd.DataFrame:
     peaks = _read_peaks(peaks_path)
     loops = _read_loops(loops_path)
 
-    # Totals
     peaks_total = int(len(peaks))
     loops_total = int(len(loops))
 
-    # Significant counts under thresholds
     peaks_signif = int(
         (
             (peaks["fdr"].astype(float) <= params.fdr)
@@ -125,13 +127,12 @@ def compute_summary(params: SummaryParams) -> pd.DataFrame:
         ).sum()
     )
 
-    # Medians (match earlier QC)
     peaks_total_reads_median = float(peaks["total"].astype(int).median())
     loops_total_pairs_median = float(loops["total_pairs"].astype(int).median())
 
-    # Calls distribution
     pk_calls = peaks["bias_call"].value_counts()
     lp_calls = loops["bias_call"].value_counts()
+    tier_counts = loops.get("evidence_tier", pd.Series([], dtype=str)).value_counts()
 
     def _get(d: pd.Series, key: str) -> int:
         try:
@@ -154,6 +155,9 @@ def compute_summary(params: SummaryParams) -> pd.DataFrame:
         ("loops_calls_Paternal", _get(lp_calls, "Paternal")),
         ("loops_calls_Balanced", _get(lp_calls, "Balanced")),
         ("loops_calls_Undetermined", _get(lp_calls, "Undetermined")),
+        ("loops_evidence_direct", _get(tier_counts, "direct")),
+        ("loops_evidence_inferred", _get(tier_counts, "inferred")),
+        ("loops_evidence_insufficient", _get(tier_counts, "insufficient")),
         ("fdr_threshold", params.fdr),
         ("min_reads_peak", params.min_reads_peak),
         ("min_pairs_loop", params.min_pairs_loop),
@@ -161,14 +165,11 @@ def compute_summary(params: SummaryParams) -> pd.DataFrame:
 
     df_summary = pd.DataFrame(summary_rows, columns=["metric", "value"])
 
-    # Pretty print block
     console.print("[bold]QC SUMMARY[/bold]")
     for m, v in summary_rows:
         console.print(f"{m}\t{v}")
 
-    # Optional TSV
     if params.write_tsv:
-        # Write a deterministic quick QC file name to avoid confusion with legacy naming
         tsv_path = params.out / f"{prefix}.quick_qc.tsv"
         df_summary.to_csv(tsv_path, sep="\t", index=False)
 

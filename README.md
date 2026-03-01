@@ -43,6 +43,43 @@ pytest -q
 
 ---
 
+## Code Quality & Development
+
+LOPHOS maintains high code quality through **static analysis** and **automated testing**.
+
+### Quality Tools
+
+- **`ruff`** — linting (unused imports, complexity, code style)
+- **`black`** — code formatting
+- **`mypy`** — static type checking (Python ≥ 3.10 strict mode)
+- **`pytest`** — unit and integration tests
+- **`pre-commit`** — automated hooks (installed with `pip install -e ".[dev]"`)
+
+### Check & Format Locally
+
+```bash
+# All-in-one: format, lint, type-check, test
+make fmt && make lint && make test
+
+# Or individually:
+ruff check . --fix          # Auto-fix linting issues
+black .                     # Reformat code
+mypy src/lophos             # Type checking
+pytest -q                   # Run tests
+```
+
+### Recent Improvements (v1.0)
+
+- **Refactored peak/loop counting** (`counts_peaks.py`, `counts_loops.py`) to reduce cyclomatic complexity while maintaining identical behavior.
+  - Extracted per-QNAME resolution logic into focused helper functions (`_update_per_qname_mates`, `_update_per_qname_peaks`)
+  - Reduced function complexity from 12–19 to ≤ 10 (ruff C901 threshold)
+- **Simplified output writers** (`report/writers.py`) by decomposing `write_loops()` into smaller, single-purpose normalization helpers (`_normalize_informative_counts`, `_normalize_evidence_columns`, etc.)
+- Removed unused variables and enforced strict type annotations throughout the codebase.
+
+All changes maintain **100% backward compatibility** — outputs and CLI interface are identical.
+
+---
+
 ## Quickstart
 
 ### Phase peaks & loops (paired-end “mates” mode, default)
@@ -277,26 +314,46 @@ LOPHOS supports two loop counting modes:
 
 ```
 src/lophos/
-  cli.py
+  cli.py                               # Typer CLI dispatcher
+  constants.py                         # Global configuration constants
   core/
-    counts_peaks.py
-    counts_loops.py         # mates + sa dispatcher
-    sa_pairs.py             # SA:Z → contacts (new)
-    stats.py
-    calls.py
-    validate_local.py
+    counts_peaks.py                    # Peak counting & per-QNAME resolution
+    counts_loops.py                    # Mate-pair (mates) & SA:Z-based (sa) loop counting
+    sa_pairs.py                        # Reconstruct split-read contacts from SA:Z tags
+    stats.py                           # Binomial test & FDR computation
+    calls.py                           # Phasing decision logic (Maternal/Paternal/Balanced)
+    validate_local.py                  # Local enrichment validation (Z-score)
+    anchor_fallback.py                 # Anchor recovery from loop definitions
+    apa.py                             # (Placeholder) Aggregate Peak Analysis
+    motif.py                           # (Placeholder) Motif enrichment
   io/
-    bam.py                  # RG mapping + SA helpers (new)
-    bed.py
-    bedpe.py
-    config.py
+    bam.py                             # BAM handling, RG mapping, SA helpers
+    bed.py                             # BED (peaks) I/O
+    bedpe.py                           # BEDPE (loops) I/O
+    config.py                          # YAML config loading & CLI merging
   report/
-    writers.py
-    qc.py
-    summary.py
+    writers.py                         # Peak/loop output formatting (refactored helpers)
+    qc.py                              # QC & sanity checks
+    summary.py                         # Summary statistics reporter
+  utils/
+    fdr.py                             # Benjamini–Hochberg FDR
+    logging.py                         # Logging configuration
 tests/
+  unit/                                # Unit tests (small, isolated)
+  integration/                         # End-to-end CLI tests
 docs/
+  SCHEMA.md                            # Output format specifications
+  usage.md                             # Detailed usage guide
+  run.md                               # Example run and development workflow
+examples/
+  configs/                             # Example YAML configs
+  notebooks/                           # Example Jupyter analyses
 ```
+
+**Key refactored modules** (v1.0):
+- `core/counts_peaks.py` — extracted `_update_per_qname_peaks()` to isolate tie-breaking logic
+- `core/counts_loops.py` — extracted `_update_per_qname_mates()` shared across mates and SA modes
+- `report/writers.py` — decomposed `write_loops()` into `_normalize_informative_counts()`, `_normalize_noninformative_counts()`, `_compute_total_and_noninformative()`, `_normalize_ambiguous_frac()`, and `_normalize_evidence_columns()`
 
 ---
 

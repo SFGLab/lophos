@@ -8,7 +8,7 @@ import pandas as pd
 import typer
 from rich.console import Console
 
-from .core import calls, counts_loops, counts_peaks, stats
+from .core import anchor_fallback, calls, counts_loops, counts_peaks, stats
 from .core.calls import BiasThresholds
 from .io import bam as bam_io
 from .io import bed as bed_io
@@ -106,7 +106,9 @@ def phase(  # noqa: C901
     peak_window: Annotated[int, typer.Option(help="Peak summit +/- bp window")] = 500,
     anchor_pad: Annotated[int, typer.Option(help="Anchor padding (bp)")] = 10_000,
     min_reads_peak: Annotated[int, typer.Option(help="Min total reads to call a peak")] = 5,
-    min_pairs_loop: Annotated[int, typer.Option(help="Min informative pairs to call a loop")] = 3,
+    min_pairs_loop: Annotated[
+        int, typer.Option(help="Min informative (M+P) pairs to call a loop")
+    ] = 3,
     fdr: Annotated[float, typer.Option(help="BH-FDR threshold")] = 0.05,
     keep_duplicates: Annotated[bool, typer.Option(help="Keep duplicates")] = False,
     validate_loops: Annotated[str, typer.Option(help="{none,local}")] = "local",
@@ -121,6 +123,33 @@ def phase(  # noqa: C901
     pseudocount: Annotated[float, typer.Option(help="Pseudocount for log2 ratio")] = 1.0,
     min_abs_log2: Annotated[float, typer.Option(help="Min |log2| for bias calling")] = 0.0,
     max_ambiguous_frac: Annotated[float, typer.Option(help="Max ambiguous fraction (loops)")] = 0.5,
+    homozygous_policy: Annotated[
+        str,
+        typer.Option(
+            help="How to treat homozygous/tied (maternal==paternal best-score) loop molecules: "
+            "drop|split50|ambiguous"
+        ),
+    ] = "split50",
+    # Anchor-based fallback inference (proxy) when direct loop evidence is insufficient
+    anchor_fallback_enabled: Annotated[
+        bool,
+        typer.Option(
+            help="Enable anchor-based inference when direct A↔B evidence is insufficient. "
+            "Outputs evidence_tier and keeps direct vs inferred calls separate."
+        ),
+    ] = True,
+    min_reads_anchor: Annotated[
+        int, typer.Option(help="[anchor-fallback] Min (M+P) reads per anchor")
+    ] = 5,
+    anchor_fdr: Annotated[
+        float, typer.Option(help="[anchor-fallback] FDR threshold for anchor bias")
+    ] = 0.05,
+    anchor_min_fold: Annotated[
+        float, typer.Option(help="[anchor-fallback] Min fold-change for anchor bias")
+    ] = 1.5,
+    anchor_min_abs_log2: Annotated[
+        float, typer.Option(help="[anchor-fallback] Min |log2| for anchor bias")
+    ] = 0.0,
     # Loop mode (new)
     loop_mode: Annotated[
         str,
@@ -169,6 +198,12 @@ def phase(  # noqa: C901
         "pseudocount": 1.0,
         "min_abs_log2": 0.0,
         "max_ambiguous_frac": 0.5,
+        "homozygous_policy": "split50",
+        "anchor_fallback_enabled": True,
+        "min_reads_anchor": 5,
+        "anchor_fdr": 0.05,
+        "anchor_min_fold": 1.5,
+        "anchor_min_abs_log2": 0.0,
         "loop_mode": "mates",
         "sa_min_mapq": 30,
         "sa_min_seg_len": 50,
@@ -215,6 +250,12 @@ def phase(  # noqa: C901
         "pseudocount": pseudocount,
         "min_abs_log2": min_abs_log2,
         "max_ambiguous_frac": max_ambiguous_frac,
+        "homozygous_policy": homozygous_policy,
+        "anchor_fallback_enabled": anchor_fallback_enabled,
+        "min_reads_anchor": min_reads_anchor,
+        "anchor_fdr": anchor_fdr,
+        "anchor_min_fold": anchor_min_fold,
+        "anchor_min_abs_log2": anchor_min_abs_log2,
         "loop_mode": loop_mode,
         "sa_min_mapq": sa_min_mapq,
         "sa_min_seg_len": sa_min_seg_len,
@@ -264,7 +305,6 @@ def phase(  # noqa: C901
             "mapq": int(params["mapq"]),
             "anchor_pad": int(params["anchor_pad"]),
             "keep_dups": bool(params["keep_duplicates"]),
-            # new dispatch + SA params (counts_loops should accept these kwargs)
             "loop_mode": str(params["loop_mode"]),
             "sa_min_mapq": int(params["sa_min_mapq"]),
             "sa_min_seg_len": int(params["sa_min_seg_len"]),
@@ -295,6 +335,7 @@ def phase(  # noqa: C901
                         min_abs_log2=float(params["min_abs_log2"]),
                     ),
                 )
+
                 # Loops
                 loop_counts = counts_loops.count_loops(
                     bam=bam_handle,
@@ -310,7 +351,9 @@ def phase(  # noqa: C901
                     sa_orientation=str(params["sa_orientation"]),
                     sa_dedup_within_read=bool(params["sa_dedup_within_read"]),
                 )
-                loop_stats = stats.compute_loop_stats(loop_counts)
+                loop_stats = stats.compute_loop_stats(
+                    loop_counts, homozygous_policy=str(params["homozygous_policy"])
+                )
                 loop_calls = calls.call_bias_for_loops(
                     loop_stats,
                     thresholds=BiasThresholds(
@@ -321,6 +364,101 @@ def phase(  # noqa: C901
                         max_ambiguous_frac=float(params["max_ambiguous_frac"]),
                     ),
                 )
+
+                # Preserve the direct evidence call before any proxy inference
+                loop_calls["bias_call_direct"] = loop_calls["bias_call"]
+
+                # Evidence tier for direct loop evidence (connectivity-based)
+                direct_tier = calls.evidence_tier_direct_for_loops(
+                    loop_calls,
+                    thresholds=BiasThresholds(
+                        min_reads=int(params["min_pairs_loop"]),
+                        fdr=float(params["fdr"]),
+                        min_fold=1.5,
+                        min_abs_log2=float(params["min_abs_log2"]),
+                        max_ambiguous_frac=float(params["max_ambiguous_frac"]),
+                    ),
+                )
+                loop_calls["evidence_tier"] = direct_tier
+
+                # Optional anchor-based inference (proxy) when direct evidence is insufficient
+                if bool(params["anchor_fallback_enabled"]):
+                    need = loop_calls["evidence_tier"] != "direct"
+                    if bool(need.any()):
+                        idxs = need[need].index.to_list()
+                        loops_subset = loops_df_full.reset_index(drop=True).loc[idxs].copy()
+                        loops_subset["loop_index"] = idxs
+
+                        anchors_df = anchor_fallback.build_loop_anchors(
+                            loops_subset,
+                            anchor_pad=int(params["anchor_pad"]),
+                        )
+                        anchors_counts = anchor_fallback.count_loop_anchors(
+                            bam_handle,
+                            anchors_df,
+                            mapq=int(params["mapq"]),
+                            keep_dups=bool(params["keep_duplicates"]),
+                        )
+                        anchors_called = anchor_fallback.compute_anchor_stats_and_calls(
+                            anchors_counts,
+                            params=anchor_fallback.AnchorFallbackParams(
+                                mapq=int(params["mapq"]),
+                                keep_duplicates=bool(params["keep_duplicates"]),
+                                min_reads_anchor=int(params["min_reads_anchor"]),
+                                fdr=float(params["anchor_fdr"]),
+                                min_fold=float(params["anchor_min_fold"]),
+                                min_abs_log2=float(params["anchor_min_abs_log2"]),
+                            ),
+                        )
+                        inferred = anchor_fallback.infer_loops_from_anchors(
+                            anchors_called
+                        ).set_index("loop_index")
+
+                        loop_calls["bias_call_inferred"] = "Undetermined"
+                        loop_calls["inferred_reason"] = "not_inferred"
+                        for li, r in inferred.iterrows():
+                            loop_calls.loc[int(li), "bias_call_inferred"] = str(
+                                r["bias_call_inferred"]
+                            )
+                            loop_calls.loc[int(li), "inferred_reason"] = str(r["inferred_reason"])
+
+                        ok_infer = (loop_calls["evidence_tier"] != "direct") & (
+                            loop_calls["bias_call_inferred"] != "Undetermined"
+                        )
+                        loop_calls.loc[ok_infer, "evidence_tier"] = "inferred"
+                    else:
+                        loop_calls["bias_call_inferred"] = "Undetermined"
+                        loop_calls["inferred_reason"] = "no_inference_needed"
+                else:
+                    loop_calls["bias_call_inferred"] = "Undetermined"
+                    loop_calls["inferred_reason"] = "anchor_fallback_disabled"
+
+                # Final call: direct if available else inferred if available else Undetermined
+                loop_calls["bias_call_final"] = loop_calls["bias_call_direct"]
+                use_inf = (loop_calls["evidence_tier"] == "inferred") & (
+                    loop_calls["bias_call_inferred"] != "Undetermined"
+                )
+                loop_calls.loc[use_inf, "bias_call_final"] = loop_calls.loc[
+                    use_inf, "bias_call_inferred"
+                ]
+                loop_calls.loc[loop_calls["evidence_tier"] == "insufficient", "bias_call_final"] = (
+                    "Undetermined"
+                )
+
+                # Keep backward compatibility: `bias_call` remains the primary loop label in writers/summary.
+                loop_calls["bias_call"] = loop_calls["bias_call_final"]
+
+                # Local validation (optional) — now also runs in single-thread mode
+                if str(params["validate_loops"]) == "local":
+                    from .core.validate_local import run_local_validation
+
+                    loop_calls = run_local_validation(
+                        bam_handle,
+                        loops_df_full,
+                        loop_calls,
+                        int(params["anchor_pad"]),
+                        int(params["mapq"]),
+                    )
             finally:
                 bam_handle.close()
         else:
@@ -345,6 +483,7 @@ def phase(  # noqa: C901
                     min_abs_log2=float(params["min_abs_log2"]),
                 ),
             )
+
             # Loops (parallel)
             loop_counts = _count_parallel(
                 bam_path_str,
@@ -354,7 +493,9 @@ def phase(  # noqa: C901
                 threads_param,
                 **loop_kwargs_common,
             )
-            loop_stats = stats.compute_loop_stats(loop_counts)
+            loop_stats = stats.compute_loop_stats(
+                loop_counts, homozygous_policy=str(params["homozygous_policy"])
+            )
             loop_calls = calls.call_bias_for_loops(
                 loop_stats,
                 thresholds=BiasThresholds(
@@ -365,6 +506,94 @@ def phase(  # noqa: C901
                     max_ambiguous_frac=float(params["max_ambiguous_frac"]),
                 ),
             )
+
+            # Preserve the direct evidence call before any proxy inference
+            loop_calls["bias_call_direct"] = loop_calls["bias_call"]
+
+            # Evidence tier for direct loop evidence (connectivity-based)
+            direct_tier = calls.evidence_tier_direct_for_loops(
+                loop_calls,
+                thresholds=BiasThresholds(
+                    min_reads=int(params["min_pairs_loop"]),
+                    fdr=float(params["fdr"]),
+                    min_fold=1.5,
+                    min_abs_log2=float(params["min_abs_log2"]),
+                    max_ambiguous_frac=float(params["max_ambiguous_frac"]),
+                ),
+            )
+            loop_calls["evidence_tier"] = direct_tier
+
+            # Optional anchor-based inference (proxy) when direct evidence is insufficient
+            if bool(params["anchor_fallback_enabled"]):
+                need = loop_calls["evidence_tier"] != "direct"
+                if bool(need.any()):
+                    bam_handle_fb = bam_io.open_bam(bam)
+                    try:
+                        idxs = need[need].index.to_list()
+                        loops_subset = loops_df_full.reset_index(drop=True).loc[idxs].copy()
+                        loops_subset["loop_index"] = idxs
+
+                        anchors_df = anchor_fallback.build_loop_anchors(
+                            loops_subset,
+                            anchor_pad=int(params["anchor_pad"]),
+                        )
+                        anchors_counts = anchor_fallback.count_loop_anchors(
+                            bam_handle_fb,
+                            anchors_df,
+                            mapq=int(params["mapq"]),
+                            keep_dups=bool(params["keep_duplicates"]),
+                        )
+                        anchors_called = anchor_fallback.compute_anchor_stats_and_calls(
+                            anchors_counts,
+                            params=anchor_fallback.AnchorFallbackParams(
+                                mapq=int(params["mapq"]),
+                                keep_duplicates=bool(params["keep_duplicates"]),
+                                min_reads_anchor=int(params["min_reads_anchor"]),
+                                fdr=float(params["anchor_fdr"]),
+                                min_fold=float(params["anchor_min_fold"]),
+                                min_abs_log2=float(params["anchor_min_abs_log2"]),
+                            ),
+                        )
+                        inferred = anchor_fallback.infer_loops_from_anchors(
+                            anchors_called
+                        ).set_index("loop_index")
+
+                        loop_calls["bias_call_inferred"] = "Undetermined"
+                        loop_calls["inferred_reason"] = "not_inferred"
+                        for li, r in inferred.iterrows():
+                            loop_calls.loc[int(li), "bias_call_inferred"] = str(
+                                r["bias_call_inferred"]
+                            )
+                            loop_calls.loc[int(li), "inferred_reason"] = str(r["inferred_reason"])
+
+                        ok_infer = (loop_calls["evidence_tier"] != "direct") & (
+                            loop_calls["bias_call_inferred"] != "Undetermined"
+                        )
+                        loop_calls.loc[ok_infer, "evidence_tier"] = "inferred"
+                    finally:
+                        bam_handle_fb.close()
+                else:
+                    loop_calls["bias_call_inferred"] = "Undetermined"
+                    loop_calls["inferred_reason"] = "no_inference_needed"
+            else:
+                loop_calls["bias_call_inferred"] = "Undetermined"
+                loop_calls["inferred_reason"] = "anchor_fallback_disabled"
+
+            # Final call: direct if available else inferred if available else Undetermined
+            loop_calls["bias_call_final"] = loop_calls["bias_call_direct"]
+            use_inf = (loop_calls["evidence_tier"] == "inferred") & (
+                loop_calls["bias_call_inferred"] != "Undetermined"
+            )
+            loop_calls.loc[use_inf, "bias_call_final"] = loop_calls.loc[
+                use_inf, "bias_call_inferred"
+            ]
+            loop_calls.loc[loop_calls["evidence_tier"] == "insufficient", "bias_call_final"] = (
+                "Undetermined"
+            )
+
+            # Keep backward compatibility: `bias_call` remains the primary loop label in writers/summary.
+            loop_calls["bias_call"] = loop_calls["bias_call_final"]
+
             # Local validation (optional)
             if str(params["validate_loops"]) == "local":
                 from .core.validate_local import run_local_validation
@@ -380,6 +609,7 @@ def phase(  # noqa: C901
                     )
                 finally:
                     bam_handle_val.close()
+
         return peak_calls, loop_calls
 
     peak_calls_full, loop_calls_full = perform_phasing()

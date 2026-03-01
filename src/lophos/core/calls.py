@@ -10,24 +10,25 @@ class BiasThresholds:
     Parameters
     ----------
     min_reads : int
-        Minimum informative read/pair count (m+p) required to attempt a bias call.
+        Minimum *informative* read/pair count (m+p) required to attempt a bias call.
         Below this threshold, the call is set to ``"Undetermined"``.
     fdr : float
         Maximum FDR value (Benjamini–Hochberg corrected p-value) required to
-        consider a feature significant.  Non-significant features are called
+        consider a feature significant. Non-significant features are called
         ``"Balanced"``.
     min_fold : float
-        Minimum fold-change (m vs p) to consider a feature biased.  Must be
-        >= 1.0.  A value of 1.0 means any deviation from equality is
-        sufficient when ``fdr`` passes.
+        Minimum fold-change (m vs p) to consider a feature biased. Must be
+        >= 1.0. A value of 1.0 means any deviation from equality is sufficient
+        when ``fdr`` passes.
     min_abs_log2 : float
-        Minimum absolute log2 ratio |log2((m+1)/(p+1))| required to call a
-        feature biased.  Features with smaller effect sizes are called
-        ``"Balanced"``.  Default is 0.0 (no effect-size threshold).
+        Minimum absolute log2 ratio |log2((m+pc)/(p+pc))| required to call a
+        feature biased. Features with smaller effect sizes are called
+        ``"Balanced"``. Default is 0.0 (no effect-size threshold).
     max_ambiguous_frac : float
-        Maximum allowable fraction of ambiguous pairs in a loop before it is
-        automatically called ``"Undetermined"``.  Applicable only to loops.
-        Defaults to 1.0 (no effect).
+        Maximum allowable fraction of *non-informative* pairs in a loop before it is
+        automatically called ``"Undetermined"``. In v1.0.0 this fraction can include
+        both ambiguous and homozygous-like ties depending on the policy used in
+        `compute_loop_stats`. Applicable only to loops. Defaults to 1.0 (no effect).
     """
 
     min_reads: int = 5  # informative reads/pairs
@@ -45,38 +46,14 @@ def _classify(
     log2_ratio: float | None = None,
     ambiguous_frac: float | None = None,
 ) -> str:
-    """Classify a feature into Maternal/Paternal/Balanced/Undetermined.
-
-    The decision is based on a combination of read counts, FDR threshold,
-    minimum fold change, effect-size threshold and ambiguous fraction.
-
-    Parameters
-    ----------
-    m : int
-        Count of maternal reads/pairs.
-    p : int
-        Count of paternal reads/pairs.
-    q : float
-        Adjusted p-value (FDR) for the feature.
-    thr : BiasThresholds
-        Threshold parameters controlling calling behaviour.
-    log2_ratio : float | None, optional
-        Pre-computed log2 ratio (m/p).  If not provided, it will be
-        calculated internally from m and p using the pseudocount defined in
-        ``lophos.constants.PSEUDOCOUNT``.  This parameter enables the caller
-        to avoid recomputing the ratio.
-    ambiguous_frac : float | None, optional
-        Fraction of ambiguous pairs for loops.  When provided, loops with
-        ``ambiguous_frac > thr.max_ambiguous_frac`` are automatically
-        called ``"Undetermined"``.
-    """
+    """Classify a feature into Maternal/Paternal/Balanced/Undetermined."""
     total = m + p
 
     # Coverage gate
     if total < thr.min_reads:
         return "Undetermined"
 
-    # Ambiguity gate (loops)
+    # Non-informative guard (loops)
     if ambiguous_frac is not None and ambiguous_frac > thr.max_ambiguous_frac:
         return "Undetermined"
 
@@ -109,12 +86,7 @@ def _classify(
 
 
 def call_bias_for_peaks(stats_df: pd.DataFrame, thresholds: BiasThresholds) -> pd.DataFrame:
-    """Apply bias classification to peaks.
-
-    This function reads the maternal/paternal counts, FDR values and log2 ratios
-    from ``stats_df`` and assigns a bias call for each peak.  See
-    ``BiasThresholds`` for controlling parameters.
-    """
+    """Apply bias classification to peaks."""
     df = stats_df.copy()
     calls: list[str] = []
     log2_ratios = df["log2_ratio"] if "log2_ratio" in df.columns else pd.Series([None] * len(df))
@@ -136,9 +108,14 @@ def call_bias_for_peaks(stats_df: pd.DataFrame, thresholds: BiasThresholds) -> p
 def call_bias_for_loops(stats_df: pd.DataFrame, thresholds: BiasThresholds) -> pd.DataFrame:
     """Apply bias classification to loops.
 
-    This function reads the informative pair counts (m/p), FDR values,
-    log2 ratios and ambiguous fractions from ``stats_df`` and assigns a
-    bias call.  See ``BiasThresholds`` for controlling parameters.
+    Expects columns:
+      - m, p (informative counts post policy)
+      - fdr_pairs
+      - log2_ratio_pairs (optional)
+      - ambiguous_frac (optional; recommended)
+
+    ambiguous_frac may include homozygous-like ties depending on the policy used
+    in compute_loop_stats().
     """
     df = stats_df.copy()
     calls: list[str] = []
@@ -163,3 +140,31 @@ def call_bias_for_loops(stats_df: pd.DataFrame, thresholds: BiasThresholds) -> p
         )
     df["bias_call"] = calls
     return df
+
+
+def evidence_tier_direct_for_loops(stats_df: pd.DataFrame, thresholds: BiasThresholds) -> pd.Series:
+    """Return a direct-evidence tier label for loops.
+
+    This is NOT the inferred-anchor fallback. It only indicates whether a loop has
+    sufficient direct (connectivity) evidence under the thresholds.
+
+    - 'direct'       : total_pairs >= min_reads AND ambiguous_frac <= max_ambiguous_frac
+    - 'insufficient' : otherwise
+
+    CLI can later upgrade 'insufficient' to 'inferred' if anchor fallback is enabled.
+    """
+    if "total_pairs" in stats_df.columns:
+        total_pairs = stats_df["total_pairs"].astype(int)
+    else:
+        total_pairs = (stats_df["m"] + stats_df["p"]).astype(int)
+
+    amb_frac = (
+        stats_df["ambiguous_frac"].astype(float)
+        if "ambiguous_frac" in stats_df.columns
+        else pd.Series([0.0] * len(stats_df), index=stats_df.index)
+    )
+
+    ok = (total_pairs >= int(thresholds.min_reads)) & (
+        amb_frac <= float(thresholds.max_ambiguous_frac)
+    )
+    return pd.Series(["direct" if v else "insufficient" for v in ok], index=stats_df.index)

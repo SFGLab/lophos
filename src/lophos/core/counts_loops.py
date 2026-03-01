@@ -19,6 +19,7 @@ class LoopRow(TypedDict):
     maternal_pairs: int
     paternal_pairs: int
     ambiguous_pairs: int
+    homozygous_pairs: int
 
 
 def _in_interval(pos: int, start: int, end: int) -> bool:
@@ -54,7 +55,6 @@ def _contact_hits_anchors(
     achr1, as1, ae1 = a1
     achr2, as2, ae2 = a2
 
-    # ep1 in anchor1 AND ep2 in anchor2 (or swapped)
     return (
         _endpoint_in_anchor(c1, s1, e1, achr1, as1, ae1)
         and _endpoint_in_anchor(c2, s2, e2, achr2, as2, ae2)
@@ -84,6 +84,63 @@ def _iter_reads_in_region(
         yield aln
 
 
+def _aln_score(aln: pysam.AlignedSegment) -> tuple[int, int, int]:
+    """
+    Score an alignment for choosing between multiple records with the same QNAME.
+
+    Higher is better.
+    We use (MAPQ, AS, -NM) so that:
+      - higher mapping quality wins
+      - then higher alignment score (AS) wins
+      - then lower edit distance (NM) wins
+    """
+    mq = int(aln.mapping_quality or 0)
+    try:
+        ascore = int(aln.get_tag("AS"))
+    except Exception:
+        ascore = 0
+    try:
+        nm = int(aln.get_tag("NM"))
+    except Exception:
+        nm = 10**9
+    return (mq, ascore, -nm)
+
+
+def _normalize_allele(a: str | None) -> str:
+    """Map allele to {maternal,paternal,ambiguous}."""
+    if a in ("maternal", "paternal"):
+        return a
+    return "ambiguous"
+
+
+def _update_per_qname_mates(
+    per_qname: dict[str, tuple[str, tuple[int, int, int]]],
+    qn: str,
+    allele: str | None,
+    score: tuple[int, int, int],
+) -> None:
+    """Update per_qname dict with best-score tie-breaking logic for mates mode."""
+    a = _normalize_allele(allele)
+    if qn not in per_qname:
+        per_qname[qn] = (a, score)
+        return
+
+    prev_a, prev_s = per_qname[qn]
+
+    if score > prev_s:
+        per_qname[qn] = (a, score)
+        return
+    if score < prev_s:
+        return
+
+    # score tie: if conflict between maternal/paternal -> homozygous/uninformative
+    if {prev_a, a} == {"maternal", "paternal"}:
+        per_qname[qn] = ("homozygous", score)
+    elif prev_a != a:
+        # includes conflicts involving ambiguous/unknown
+        per_qname[qn] = ("ambiguous", score)
+
+
 # ------------------------ mates mode ------------------------
 
 
@@ -98,18 +155,23 @@ def _counts_for_single_loop_mates(
     anchor_pad: int,
     mapq: int,
     keep_dups: bool,
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int]:
     """
     Count mate-pairs that bridge the two anchors (±pad) in either direction.
-    Assumes mates share RG; if not, class as ambiguous.
+
+    IMPORTANT for MAT_PAT merged BAMs:
+      The same molecule (QNAME) may appear in both maternal and paternal alignments.
+      We must resolve one contribution per QNAME per loop using a best-alignment rule.
+      If best scores are tied but alleles conflict (maternal vs paternal), treat as homozygous/uninformative.
     """
     a1s, a1e = s1 - anchor_pad, e1 + anchor_pad
     a2s, a2e = s2 - anchor_pad, e2 + anchor_pad
 
-    mm = pp = amb = 0
-    seen_qnames: set[str] = set()  # avoid double-counting the same template
+    # qname -> (allele_state, best_score)
+    # allele_state ∈ {"maternal","paternal","ambiguous","homozygous"}
+    per_qname: dict[str, tuple[str, tuple[int, int, int]]] = {}
 
-    # Fetch reads from both anchors
+    # Fetch reads from both anchors; resolve per QNAME instead of first-seen wins.
     for fchr, fs, fe in ((chr1, a1s, a1e), (chr2, a2s, a2e)):
         for aln in _iter_reads_in_region(bam, fchr, fs, fe, mapq, keep_dups):
             if not aln.is_paired or aln.next_reference_id < 0:
@@ -118,25 +180,24 @@ def _counts_for_single_loop_mates(
             qn = aln.query_name
             if qn is None:
                 continue
-            if qn in seen_qnames:
-                continue
 
             mate_chr = bam.get_reference_name(aln.next_reference_id)
             mate_pos = aln.next_reference_start
 
+            # Determine whether this template bridges anchors
             hit_a1_to_a2 = (aln.reference_name == chr1) and _in_interval(mate_pos, a2s, a2e)
             hit_a2_to_a1 = (aln.reference_name == chr2) and _in_interval(mate_pos, a1s, a1e)
-            if (mate_chr == chr2 and hit_a1_to_a2) or (mate_chr == chr1 and hit_a2_to_a1):
-                seen_qnames.add(qn)
-                a = allele_from_rg(aln)  # assume mate has same RG in phased pipelines
-                if a == "maternal":
-                    mm += 1
-                elif a == "paternal":
-                    pp += 1
-                else:
-                    amb += 1
+            supports = (mate_chr == chr2 and hit_a1_to_a2) or (mate_chr == chr1 and hit_a2_to_a1)
+            if not supports:
+                continue
 
-    return mm, pp, amb
+            _update_per_qname_mates(per_qname, qn, allele_from_rg(aln), _aln_score(aln))
+
+    mm = sum(1 for a, _ in per_qname.values() if a == "maternal")
+    pp = sum(1 for a, _ in per_qname.values() if a == "paternal")
+    amb = sum(1 for a, _ in per_qname.values() if a == "ambiguous")
+    hom = sum(1 for a, _ in per_qname.values() if a == "homozygous")
+    return mm, pp, amb, hom
 
 
 def _count_loops_mates(
@@ -148,13 +209,13 @@ def _count_loops_mates(
 ) -> pd.DataFrame:
     """
     Mate-pair based loop counting (paired-end HiChIP/Hi-C style).
-    Counts a pair if one read maps in anchor A (±pad) and its *mate* maps in anchor B (±pad), in either direction.
+    Counts a template if one read maps in anchor A (±pad) and its mate maps in anchor B (±pad), in either direction.
     """
     rows: list[LoopRow] = []
     for _, row in loops.iterrows():
         chr1, s1, e1 = str(row["chrom1"]), int(row["start1"]), int(row["end1"])
         chr2, s2, e2 = str(row["chrom2"]), int(row["start2"]), int(row["end2"])
-        mm, pp, amb = _counts_for_single_loop_mates(
+        mm, pp, amb, hom = _counts_for_single_loop_mates(
             bam, chr1, s1, e1, chr2, s2, e2, anchor_pad, mapq, keep_dups
         )
         rows.append(
@@ -168,6 +229,7 @@ def _count_loops_mates(
                 "maternal_pairs": mm,
                 "paternal_pairs": pp,
                 "ambiguous_pairs": amb,
+                "homozygous_pairs": hom,
             }
         )
     return pd.DataFrame(rows)
@@ -194,27 +256,27 @@ def _counts_for_single_loop_sa(
     sa_allow_trans: bool,
     sa_orientation: str,
     sa_dedup_within_read: bool,
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int]:
     """
     For each read overlapping either padded anchor, reconstruct adjacent-segment contacts within the read
-    (using SA:Z), then count contacts that span the two anchors (in either direction). Allele from RG.
+    (using SA:Z), then count reads whose reconstructed contacts span the two anchors (in either direction).
+
+    IMPORTANT for MAT_PAT merged BAMs:
+      Resolve one contribution per QNAME per loop (best alignment wins).
+      If best scores are tied but alleles conflict (maternal vs paternal), classify as homozygous/uninformative.
     """
     from .sa_pairs import build_contacts
 
     a1 = (chr1, s1 - anchor_pad, e1 + anchor_pad)
     a2 = (chr2, s2 - anchor_pad, e2 + anchor_pad)
 
-    mm = pp = amb = 0
-    seen_reads: set[str] = set()  # avoid processing same read twice for this loop
+    per_qname: dict[str, tuple[str, tuple[int, int, int]]] = {}
 
     for fchr, fs, fe in ((a1[0], a1[1], a1[2]), (a2[0], a2[1], a2[2])):
         for aln in _iter_reads_in_region(bam, fchr, fs, fe, mapq, keep_dups):
             qn = aln.query_name
             if qn is None:
                 continue
-            if qn in seen_reads:
-                continue
-            seen_reads.add(qn)
 
             contacts = build_contacts(
                 aln,
@@ -228,20 +290,23 @@ def _counts_for_single_loop_sa(
             if not contacts:
                 continue
 
+            supports = False
             for c in contacts:
                 ep1 = (str(c["chrom1"]), int(c["start1"]), int(c["end1"]))
                 ep2 = (str(c["chrom2"]), int(c["start2"]), int(c["end2"]))
-                if not _contact_hits_anchors(ep1, ep2, a1, a2):
-                    continue
-                allele = allele_from_rg(aln)
-                if allele == "maternal":
-                    mm += 1
-                elif allele == "paternal":
-                    pp += 1
-                else:
-                    amb += 1
+                if _contact_hits_anchors(ep1, ep2, a1, a2):
+                    supports = True
+                    break
+            if not supports:
+                continue
 
-    return mm, pp, amb
+            _update_per_qname_mates(per_qname, qn, allele_from_rg(aln), _aln_score(aln))
+
+    mm = sum(1 for a, _ in per_qname.values() if a == "maternal")
+    pp = sum(1 for a, _ in per_qname.values() if a == "paternal")
+    amb = sum(1 for a, _ in per_qname.values() if a == "ambiguous")
+    hom = sum(1 for a, _ in per_qname.values() if a == "homozygous")
+    return mm, pp, amb, hom
 
 
 def _count_loops_sa(
@@ -266,7 +331,7 @@ def _count_loops_sa(
     for _, row in loops.iterrows():
         chr1, s1, e1 = str(row["chrom1"]), int(row["start1"]), int(row["end1"])
         chr2, s2, e2 = str(row["chrom2"]), int(row["start2"]), int(row["end2"])
-        mm, pp, amb = _counts_for_single_loop_sa(
+        mm, pp, amb, hom = _counts_for_single_loop_sa(
             bam,
             chr1,
             s1,
@@ -295,6 +360,7 @@ def _count_loops_sa(
                 "maternal_pairs": mm,
                 "paternal_pairs": pp,
                 "ambiguous_pairs": amb,
+                "homozygous_pairs": hom,
             }
         )
     return pd.DataFrame(rows)
@@ -321,13 +387,12 @@ def count_loops(
     """
     Dispatch counting by loop mode.
 
-    Parameters
-    ----------
     loop_mode : {'mates','sa'}
-        'mates' -> paired-end mate logic (default, previous behavior).
+        'mates' -> paired-end mate logic (default).
         'sa'    -> SA:Z-based split-read reconstruction (long-read mode).
 
-    SA parameters are used only when loop_mode='sa'.
+    NOTE: Output now includes `homozygous_pairs`:
+      counts of templates where maternal vs paternal support is tied at best score (uninformative for phasing).
     """
     mode = (loop_mode or "mates").lower()
     if mode == "mates":

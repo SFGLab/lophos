@@ -14,56 +14,60 @@ def run_local_validation(
 ) -> pd.DataFrame:
     """Approximate local validation for loop bias calls.
 
-    The goal of local validation is to place a loop's maternal/paternal
-    imbalance into context relative to other loops.  A simple z-score is
-    computed from the global distribution of the difference ``(m - p)`` and
-    used to derive a two-sided p-value under a standard normal model.  This
-    serves as a proxy for local enrichment when a true local background model
-    is unavailable.  Future improvements may bin loops by genomic distance
-    and sample matched controls.
+    This is lightweight QC only.
 
-    Parameters
-    ----------
-    _bam : Any
-        BAM handle (unused in this approximation).
-    _loops_df : pd.DataFrame
-        Original loops dataframe (unused in this approximation).
-    loop_calls : pd.DataFrame
-        Dataframe of loop statistics and bias calls.
-    anchor_pad : int
-        Anchor padding used during counting (unused here).
-    mapq : int
-        MAPQ threshold used during counting (unused here).
+    v1.0+ behavior:
+      - if `evidence_tier` is present, the background distribution is estimated
+        from loops with `evidence_tier == 'direct'` ONLY (to avoid circularity
+        when anchor-fallback inference is enabled).
+      - z/p are computed for all loops using that reference distribution.
 
-    Returns
-    -------
-    pd.DataFrame
-        A copy of ``loop_calls`` with two additional columns:
-        ``local_enrichment_z`` (float) and ``local_enrichment_p`` (float).
+    Accepts either:
+      - `m`, `p` (older/internal naming)
+      - `maternal_pairs`, `paternal_pairs` (current normalized naming)
     """
     import numpy as np
     from scipy.stats import norm
 
-    # We ignore anchor_pad, mapq, _bam and _loops_df in this approximation
+    # Currently unused here; keep signature stable.
     _ = (anchor_pad, mapq, _bam, _loops_df)
 
     out = loop_calls.copy()
-    # Ensure required columns exist
-    if not {"m", "p"}.issubset(out.columns):
-        # Nothing to compute
+
+    # Select maternal/paternal columns
+    if {"m", "p"}.issubset(out.columns):
+        mcol, pcol = "m", "p"
+    elif {"maternal_pairs", "paternal_pairs"}.issubset(out.columns):
+        mcol, pcol = "maternal_pairs", "paternal_pairs"
+    else:
         out["local_enrichment_z"] = 0.0
         out["local_enrichment_p"] = 1.0
+        out["local_enrichment_ref"] = "none"
         return out
-    # Compute the signed difference between maternal and paternal counts
-    diff = (out["m"].astype(float) - out["p"].astype(float)).to_numpy()
-    # Use population standard deviation; if std is zero, set to 1 to avoid division by zero
-    std = float(np.std(diff, ddof=0))
+
+    # Choose background subset (prefer direct-evidence loops)
+    ref = out
+    ref_label = "all"
+    if "evidence_tier" in out.columns:
+        direct = out[out["evidence_tier"].astype(str) == "direct"]
+        if len(direct) >= 10:
+            ref = direct
+            ref_label = "direct"
+        else:
+            ref = out
+            ref_label = "all_fallback"
+
+    ref_diff = (ref[mcol].astype(float) - ref[pcol].astype(float)).to_numpy()
+    std = float(np.std(ref_diff, ddof=0))
     if std == 0.0:
         std = 1.0
-    mean = float(np.mean(diff))
-    # Compute z-scores and two-sided p-values under the normal distribution
+    mean = float(np.mean(ref_diff))
+
+    diff = (out[mcol].astype(float) - out[pcol].astype(float)).to_numpy()
     z = (diff - mean) / std
     pvals = 2.0 * norm.sf(np.abs(z))
+
     out["local_enrichment_z"] = z
     out["local_enrichment_p"] = pvals
+    out["local_enrichment_ref"] = ref_label
     return out
